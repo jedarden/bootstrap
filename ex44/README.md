@@ -22,7 +22,7 @@ Bootstrap script for Hetzner EX44 dedicated server. Sets up a hardened, multi-us
 | **Search** | ripgrep (rg), fd, fzf, silversearcher (ag) |
 | **Files** | bat, exa, tree |
 | **Network** | httpie, mtr, tcpdump, netcat, dnsutils |
-| **Dev** | git, tmux, neovim, python3, nodejs, build-essential |
+| **Dev** | git, gh (GitHub CLI), tmux, neovim, python3, nodejs, build-essential |
 
 ## Prerequisites
 

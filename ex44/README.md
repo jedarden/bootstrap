@@ -4,21 +4,32 @@ Bootstrap script for Hetzner EX44 dedicated server. Sets up a hardened, multi-us
 
 ## What It Does
 
-1. **System Update** - Updates packages, installs base tools
-2. **User Creation** - Creates isolated users (`dev-coding`, `dev-trading`)
-3. **SSH Hardening** - Key-only auth, no root login, no passwords
-4. **Firewall** - Blocks all incoming except Tailscale + Hetzner rescue
-5. **Tailscale** - Secure mesh access with SSH
-6. **Docker** - Container runtime for both users
-7. **Security** - fail2ban, automatic security updates
+1. **System Update** - Updates packages
+2. **Package Install** - Comprehensive dev and sysadmin tools
+3. **User Creation** - Isolated users (`coding`, `trading`)
+4. **SSH Hardening** - Key-only, no root, protocol hardening
+5. **Kernel Hardening** - sysctl security settings
+6. **Firewall** - UFW: deny all except Tailscale + Hetzner rescue
+7. **Tailscale** - Secure mesh access with SSH
+8. **Docker** - Hardened container runtime
+9. **Security Services** - fail2ban, auditd, auto-updates
+
+## Installed Utilities
+
+| Category | Tools |
+|----------|-------|
+| **System** | htop, ncdu, duf, iotop, nload, vnstat, sysstat |
+| **Search** | ripgrep (rg), fd, fzf, silversearcher (ag) |
+| **Files** | bat, exa, tree |
+| **Network** | httpie, mtr, tcpdump, netcat, dnsutils |
+| **Dev** | git, tmux, neovim, python3, nodejs, build-essential |
 
 ## Prerequisites
 
 Before running, have ready:
-- Your **SSH public key** (e.g., `ssh-ed25519 AAAA...`)
 - A **Tailscale auth key** from [Tailscale Admin Console](https://login.tailscale.com/admin/settings/keys)
-  - Create a reusable key or one-time key
-  - Enable "Pre-approved" if you want auto-approval
+
+SSH key is embedded in the repo (`keys/jedarden.pub`).
 
 ## Usage
 
@@ -30,7 +41,6 @@ Before running, have ready:
    ```bash
    installimage
    # Select: Debian 12 or Ubuntu 24.04
-   # Configure partitioning as needed
    # Reboot when prompted
    ```
 4. SSH back in after reboot: `ssh root@<your-server-ip>`
@@ -38,61 +48,76 @@ Before running, have ready:
    ```bash
    curl -sL https://raw.githubusercontent.com/jedarden/bootstrap/main/ex44/bootstrap.sh | bash
    ```
-6. Enter your SSH public key when prompted
-7. Enter your Tailscale auth key when prompted
-8. Wait ~5 minutes for completion
+6. Enter your Tailscale auth key when prompted
+7. Wait ~5-10 minutes for completion
 
 ### After Bootstrap
 
 Connect via Tailscale (public IP is firewalled):
 ```bash
-ssh dev-coding@<hostname>.tailnet
-ssh dev-trading@<hostname>.tailnet
+ssh coding@<hostname>.tailnet
+ssh trading@<hostname>.tailnet
 ```
 
-## Security Model
+## Security Features
 
-```
-Internet
-    │
-    ├── Public IP (Hetzner)
-    │   └── Firewall: DENY ALL
-    │       └── Exception: Hetzner rescue IPs → port 22
-    │
-    └── Tailscale Mesh (encrypted)
-        └── tailscale0 interface
-            └── Firewall: ALLOW ALL
-                └── SSH to dev-coding / dev-trading
-```
+### Network
+- UFW firewall: deny all incoming by default
+- Only Tailscale interface allowed
+- SSH from Hetzner rescue IPs only (emergency)
 
-- **No public SSH** - Only accessible via Tailscale
-- **No root login** - Only dev-coding and dev-trading users
-- **No passwords** - SSH key authentication only
-- **Isolated users** - Each has separate home, TMPDIR, and permissions
-- **Auto-updates** - Security patches applied automatically
+### SSH Hardening
+- No root login
+- No password authentication
+- Key-only with modern ciphers
+- Rate limiting (3 attempts, then ban)
+
+### Kernel Hardening (sysctl)
+- SYN flood protection
+- IP spoofing protection
+- ICMP redirect disabled
+- Source routing disabled
+- Memory protections (ASLR, etc.)
+
+### Services
+- **fail2ban** - Blocks brute force attempts
+- **auditd** - Logs security-relevant events
+- **unattended-upgrades** - Auto security patches
+- **rkhunter/chkrootkit** - Rootkit detection (installed, run manually)
+
+### Docker Hardening
+- User namespace remapping
+- No inter-container communication by default
+- No new privileges flag
+- Log rotation
 
 ## User Isolation
 
-Each user has:
-- Separate home directory (`/home/dev-coding`, `/home/dev-trading`)
-- Isolated temp directory (`$HOME/.tmp` via `TMPDIR`)
-- Docker access (both in `docker` group)
-- Cannot access each other's files (standard Unix permissions)
+```
+/home/coding/
+├── .ssh/authorized_keys
+├── .bashrc              # Isolated TMPDIR, aliases
+├── .tmux.conf           # tmux config
+├── .tmp/                # User-specific temp (TMPDIR)
+├── .cache/              # User-specific cache
+└── workspace/           # Work directory
+
+/home/trading/
+└── (same structure)
+```
+
+- Users cannot access each other's home directories
+- Each has isolated `TMPDIR` and `XDG_CACHE_HOME`
+- Docker group membership for both
 
 ## File Structure
 
 ```
-/home/dev-coding/
-├── .ssh/authorized_keys    # Your SSH key
-├── .bashrc                 # Shell config with isolated TMPDIR
-├── .tmp/                   # User-specific temp directory
-└── (your workspaces)
-
-/home/dev-trading/
-├── .ssh/authorized_keys
-├── .bashrc
-├── .tmp/
-└── (your workspaces)
+ex44/
+├── bootstrap.sh         # Main bootstrap script
+├── keys/
+│   └── jedarden.pub     # SSH public key
+└── README.md            # This file
 ```
 
 ## Recovery
@@ -103,37 +128,38 @@ If you lose Tailscale access:
 3. SSH in via public IP (allowed from Hetzner rescue)
 4. Mount filesystem and fix, or re-run bootstrap
 
-## Future Automation
-
-This manual bootstrap is Phase 1. Future phases:
-- **Phase 2**: Ansible playbooks for configuration management
-- **Phase 3**: K8s-triggered provisioning via Hetzner Robot API
-
-The bootstrap script is designed to be idempotent - safe to re-run.
-
-## Customization
-
-Edit the script to:
-- Add more users
-- Change installed packages
-- Modify firewall rules
-- Add dotfiles
-
 ## Verification Commands
 
 ```bash
-# Check firewall
+# Firewall
 ufw status verbose
 
-# Check Tailscale
+# Tailscale
 tailscale status
 
-# Check SSH config
+# SSH hardening
 sshd -T | grep -E 'permitrootlogin|passwordauthentication|allowusers'
 
-# Check Docker
+# Docker
 docker run hello-world
 
-# Check fail2ban
-fail2ban-client status
+# fail2ban
+fail2ban-client status sshd
+
+# auditd
+auditctl -l
+
+# Kernel params
+sysctl -a | grep -E 'rp_filter|syncookies'
+
+# Disk usage
+ncdu /
+
+# System overview
+htop
 ```
+
+## Future Automation
+
+- **Phase 2**: Ansible playbooks for drift management
+- **Phase 3**: K8s-triggered provisioning via Hetzner Robot API

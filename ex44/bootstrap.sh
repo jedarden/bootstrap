@@ -27,14 +27,20 @@ if [[ -z "$TAILSCALE_AUTHKEY" ]]; then
     exit 1
 fi
 
-# Fetch SSH key from repo
-echo "Fetching SSH public key from repo..."
-SSH_PUBLIC_KEY=$(curl -sL "$REPO_URL/keys/jedarden.pub")
+# Fetch SSH keys from repo
+echo "Fetching SSH public keys from repo..."
+SSH_KEY_1=$(curl -sL "$REPO_URL/keys/jedarden.pub")
+SSH_KEY_2=$(curl -sL "$REPO_URL/keys/jeda-mbp.pub")
 
-if [[ -z "$SSH_PUBLIC_KEY" ]]; then
-    echo "ERROR: Failed to fetch SSH key"
+if [[ -z "$SSH_KEY_1" ]]; then
+    echo "ERROR: Failed to fetch SSH key (jedarden.pub)"
     exit 1
 fi
+
+# Combine all keys
+SSH_PUBLIC_KEYS="$SSH_KEY_1"
+[[ -n "$SSH_KEY_2" ]] && SSH_PUBLIC_KEYS="$SSH_PUBLIC_KEYS
+$SSH_KEY_2"
 
 echo ""
 echo "=== Step 1: System Update ==="
@@ -132,9 +138,9 @@ for user in "${USERS[@]}"; do
     # Create user if doesn't exist
     id "$user" &>/dev/null || useradd -m -s /bin/bash "$user"
 
-    # Set up SSH directory and key
+    # Set up SSH directory and keys
     mkdir -p "/home/$user/.ssh"
-    echo "$SSH_PUBLIC_KEY" > "/home/$user/.ssh/authorized_keys"
+    echo "$SSH_PUBLIC_KEYS" > "/home/$user/.ssh/authorized_keys"
     chmod 700 "/home/$user/.ssh"
     chmod 600 "/home/$user/.ssh/authorized_keys"
     chown -R "$user:$user" "/home/$user/.ssh"

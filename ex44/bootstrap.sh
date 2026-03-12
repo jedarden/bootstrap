@@ -202,22 +202,43 @@ fi
 
 # Configure DNS to use Cloudflare (1.1.1.1) - idempotent
 echo "Configuring DNS (Cloudflare 1.1.1.1)..."
-mkdir -p /etc/systemd/resolved.conf.d
-cat > /etc/systemd/resolved.conf.d/dns.conf << 'DNSCONF'
+
+# First, ensure we have working DNS by setting resolv.conf directly
+# This is a fallback that works regardless of systemd-resolved state
+if ! getent hosts debian.org &>/dev/null; then
+    echo "DNS not working, setting direct nameserver..."
+    echo -e "nameserver 1.1.1.1\nnameserver 1.0.0.1" > /etc/resolv.conf
+fi
+
+# Configure systemd-resolved if available
+if command -v systemctl &>/dev/null && systemctl list-unit-files systemd-resolved.service &>/dev/null; then
+    mkdir -p /etc/systemd/resolved.conf.d
+    cat > /etc/systemd/resolved.conf.d/dns.conf << 'DNSCONF'
 [Resolve]
 DNS=1.1.1.1 1.0.0.1
 FallbackDNS=8.8.8.8 8.8.4.4
 DNSOverTLS=opportunistic
 DNSCONF
 
-# Restart systemd-resolved if running
-if systemctl is-active --quiet systemd-resolved; then
-    systemctl restart systemd-resolved
+    # Enable and start systemd-resolved
+    systemctl enable systemd-resolved 2>/dev/null || true
+    systemctl start systemd-resolved 2>/dev/null || true
+
+    # Only switch to stub-resolv if resolved is actually running
+    if systemctl is-active --quiet systemd-resolved; then
+        # Backup current resolv.conf if it's not already a symlink
+        if [[ ! -L /etc/resolv.conf ]]; then
+            cp /etc/resolv.conf /etc/resolv.conf.backup 2>/dev/null || true
+        fi
+        ln -sf ../run/systemd/resolve/stub-resolv.conf /etc/resolv.conf 2>/dev/null || true
+    fi
 fi
 
-# Ensure resolv.conf points to systemd-resolved
-if [[ ! -L /etc/resolv.conf ]] || [[ "$(readlink /etc/resolv.conf)" != "../run/systemd/resolve/stub-resolv.conf" ]]; then
-    ln -sf ../run/systemd/resolve/stub-resolv.conf /etc/resolv.conf 2>/dev/null || true
+# Verify DNS is working
+if ! getent hosts debian.org &>/dev/null; then
+    echo "WARNING: DNS still not working, falling back to direct config..."
+    rm -f /etc/resolv.conf
+    echo -e "nameserver 1.1.1.1\nnameserver 1.0.0.1" > /etc/resolv.conf
 fi
 
 # Verify settings

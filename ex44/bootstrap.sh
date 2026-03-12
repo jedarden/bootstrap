@@ -4,10 +4,17 @@ set -euo pipefail
 # Hetzner EX44 Bootstrap Script
 # Hardens a fresh Debian/Ubuntu install and sets up isolated dev workspaces
 #
-# Usage (from rescue or fresh install):
-#   curl -sL https://raw.githubusercontent.com/jedarden/bootstrap/main/ex44/bootstrap.sh | bash
+# Usage (download and run - interactive prompts require terminal):
+#   curl -sLO https://raw.githubusercontent.com/jedarden/bootstrap/main/ex44/bootstrap.sh
+#   chmod +x bootstrap.sh
+#   ./bootstrap.sh
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Handle both direct execution and sourcing
+if [[ -n "${BASH_SOURCE[0]:-}" ]]; then
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+else
+    SCRIPT_DIR="$(pwd)"
+fi
 REPO_URL="https://raw.githubusercontent.com/jedarden/bootstrap/main/ex44"
 
 echo "=== Hetzner EX44 Bootstrap ==="

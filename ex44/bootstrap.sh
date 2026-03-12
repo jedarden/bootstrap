@@ -4,10 +4,20 @@ set -euo pipefail
 # Hetzner EX44 Bootstrap Script
 # Hardens a fresh Debian/Ubuntu install and sets up isolated dev workspaces
 #
+# Version: 1.0.0
+#
 # Usage (download and run - interactive prompts require terminal):
 #   curl -sLO https://raw.githubusercontent.com/jedarden/bootstrap/main/ex44/bootstrap.sh
 #   chmod +x bootstrap.sh
 #   ./bootstrap.sh
+
+VERSION="1.0.0"
+
+# Handle --version flag
+if [[ "${1:-}" == "--version" ]] || [[ "${1:-}" == "-v" ]]; then
+    echo "Hetzner EX44 Bootstrap v${VERSION}"
+    exit 0
+fi
 
 # Handle both direct execution and sourcing
 if [[ -n "${BASH_SOURCE[0]:-}" ]]; then
@@ -17,7 +27,7 @@ else
 fi
 REPO_URL="https://raw.githubusercontent.com/jedarden/bootstrap/main/ex44"
 
-echo "=== Hetzner EX44 Bootstrap ==="
+echo "=== Hetzner EX44 Bootstrap v${VERSION} ==="
 echo ""
 
 # Check if running as root
@@ -1431,12 +1441,13 @@ systemctl restart sshd
 
 echo ""
 echo "=============================================="
-echo "=== Bootstrap Complete ==="
+echo "=== Bootstrap Complete (v${VERSION}) ==="
 echo "=============================================="
 echo ""
 echo "INSTALLATION SUMMARY"
 echo "=============================================="
 echo ""
+echo "Bootstrap:    v${VERSION}"
 echo "Hostname:     $NEW_HOSTNAME"
 echo "Timezone:     America/New_York"
 echo "Locale:       en_US.UTF-8"

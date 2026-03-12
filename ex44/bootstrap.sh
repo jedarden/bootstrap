@@ -4,14 +4,14 @@ set -euo pipefail
 # Hetzner EX44 Bootstrap Script
 # Hardens a fresh Debian/Ubuntu install and sets up isolated dev workspaces
 #
-# Version: 1.0.1
+# Version: 1.0.2
 #
 # Usage (download and run - interactive prompts require terminal):
 #   curl -sLO https://raw.githubusercontent.com/jedarden/bootstrap/main/ex44/bootstrap.sh
 #   chmod +x bootstrap.sh
 #   ./bootstrap.sh
 
-VERSION="1.0.1"
+VERSION="1.0.2"
 
 # Handle --version flag
 if [[ "${1:-}" == "--version" ]] || [[ "${1:-}" == "-v" ]]; then
@@ -77,8 +77,8 @@ CONFIGEOF
 load_config() {
     if [[ -f "$CONFIG_FILE" ]]; then
         source "$CONFIG_FILE"
-        # Convert USERS string back to array
-        read -ra USERS <<< "$USERS"
+        # Convert USERS string back to array (use default if empty)
+        read -ra USERS <<< "${USERS:-}"
         return 0
     fi
     return 1

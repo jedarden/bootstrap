@@ -27,106 +27,180 @@ if [[ $EUID -ne 0 ]]; then
 fi
 
 # ===========================================
+# Configuration storage
+# ===========================================
+CONFIG_DIR="/etc/bootstrap"
+CONFIG_FILE="$CONFIG_DIR/config"
+HARDWARE_UUID=$(cat /sys/class/dmi/id/product_uuid 2>/dev/null || echo "unknown")
+
+# Function to save configuration (non-sensitive values only)
+save_config() {
+    mkdir -p "$CONFIG_DIR"
+    chmod 700 "$CONFIG_DIR"
+    cat > "$CONFIG_FILE" << CONFIGEOF
+# Bootstrap configuration - saved $(date)
+# Non-sensitive values only. Secrets are prompted each run.
+NEW_HOSTNAME="$NEW_HOSTNAME"
+USERS="${USERS[*]}"
+B2_BUCKET="$B2_BUCKET"
+B2_PATH_PREFIX="$B2_PATH_PREFIX"
+B2_ACCOUNT_ID="$B2_ACCOUNT_ID"
+REBOOT_AFTER_BOOTSTRAP="$REBOOT_AFTER_BOOTSTRAP"
+CONFIGEOF
+    chmod 600 "$CONFIG_FILE"
+}
+
+# Function to load configuration
+load_config() {
+    if [[ -f "$CONFIG_FILE" ]]; then
+        source "$CONFIG_FILE"
+        # Convert USERS string back to array
+        read -ra USERS <<< "$USERS"
+        return 0
+    fi
+    return 1
+}
+
+# ===========================================
 # Collect all inputs upfront
 # ===========================================
 echo ""
-echo "Enter configuration values. Script will run unattended after this."
-echo ""
 
-# Hostname
-CURRENT_HOSTNAME=$(hostname)
-read -p "Hostname [$CURRENT_HOSTNAME]: " NEW_HOSTNAME
-NEW_HOSTNAME="${NEW_HOSTNAME:-$CURRENT_HOSTNAME}"
+USE_PREVIOUS_CONFIG=false
 
-# Users to create
-echo ""
-echo "Users to create (enter each username, empty line to finish)"
-USERS=()
-while true; do
-    if [[ ${#USERS[@]} -eq 0 ]]; then
-        read -p "Username (or Enter for default 'coding'): " USERNAME
-        if [[ -z "$USERNAME" ]]; then
-            USERS=("coding" "trading")
-            echo "Using default users: coding, trading"
-            break
-        fi
-    else
-        read -p "Username (or Enter to finish): " USERNAME
-        if [[ -z "$USERNAME" ]]; then
-            break
-        fi
+# Check for previous configuration
+if load_config; then
+    echo "Previous configuration found:"
+    echo "  Hostname: $NEW_HOSTNAME"
+    echo "  Users: ${USERS[*]}"
+    echo "  B2 Bucket: ${B2_BUCKET:-<not configured>}"
+    echo "  B2 Path Prefix: ${B2_PATH_PREFIX:-<not configured>}"
+    echo "  B2 Account ID: ${B2_ACCOUNT_ID:-<not configured>}"
+    echo "  Reboot after: $REBOOT_AFTER_BOOTSTRAP"
+    echo ""
+    read -p "Use previous configuration? [Y/n]: " USE_PREV
+    if [[ ! "$USE_PREV" =~ ^[Nn]$ ]]; then
+        USE_PREVIOUS_CONFIG=true
+        echo "Using previous configuration. Will prompt for secrets only."
     fi
-    # Validate username (lowercase, alphanumeric, underscore, hyphen)
-    if [[ ! "$USERNAME" =~ ^[a-z_][a-z0-9_-]*$ ]]; then
-        echo "Invalid username. Use lowercase letters, numbers, underscore, hyphen."
-        continue
-    fi
-    USERS+=("$USERNAME")
-    echo "  Added: $USERNAME"
-done
-echo "Users to create: ${USERS[*]}"
-
-# Tailscale
-echo ""
-read -p "Tailscale auth key (tskey-auth-...): " TAILSCALE_AUTHKEY
-if [[ -z "$TAILSCALE_AUTHKEY" ]]; then
-    echo "ERROR: Tailscale auth key is required"
-    exit 1
 fi
 
-# B2 Backup configuration
-HARDWARE_UUID=$(cat /sys/class/dmi/id/product_uuid 2>/dev/null || echo "unknown")
+if ! $USE_PREVIOUS_CONFIG; then
+    echo "Enter configuration values. Script will run unattended after this."
+    echo ""
 
-echo ""
-echo "Backblaze B2 Backup Configuration"
-echo "  Hardware UUID: $HARDWARE_UUID"
-echo "  (Leave Account ID empty to skip backup setup)"
-echo ""
-read -p "B2 Bucket name: " B2_BUCKET
-read -p "B2 Path prefix [hetzner-ex44]: " B2_PATH_PREFIX
-B2_PATH_PREFIX="${B2_PATH_PREFIX:-hetzner-ex44}"
-read -p "B2 Account ID (or Key ID): " B2_ACCOUNT_ID
-read -p "B2 Application Key: " B2_APPLICATION_KEY
+    # Hostname
+    CURRENT_HOSTNAME=$(hostname)
+    read -p "Hostname [$CURRENT_HOSTNAME]: " NEW_HOSTNAME
+    NEW_HOSTNAME="${NEW_HOSTNAME:-$CURRENT_HOSTNAME}"
 
+    # Users to create
+    echo ""
+    echo "Users to create (enter each username, empty line to finish)"
+    USERS=()
+    while true; do
+        if [[ ${#USERS[@]} -eq 0 ]]; then
+            read -p "Username (or Enter for default 'coding'): " USERNAME
+            if [[ -z "$USERNAME" ]]; then
+                USERS=("coding" "trading")
+                echo "Using default users: coding, trading"
+                break
+            fi
+        else
+            read -p "Username (or Enter to finish): " USERNAME
+            if [[ -z "$USERNAME" ]]; then
+                break
+            fi
+        fi
+        # Validate username (lowercase, alphanumeric, underscore, hyphen)
+        if [[ ! "$USERNAME" =~ ^[a-z_][a-z0-9_-]*$ ]]; then
+            echo "Invalid username. Use lowercase letters, numbers, underscore, hyphen."
+            continue
+        fi
+        USERS+=("$USERNAME")
+        echo "  Added: $USERNAME"
+    done
+    echo "Users to create: ${USERS[*]}"
+
+    # B2 Backup configuration (non-sensitive parts)
+    echo ""
+    echo "Backblaze B2 Backup Configuration"
+    echo "  Hardware UUID: $HARDWARE_UUID"
+    echo "  (Leave Bucket name empty to skip backup setup)"
+    echo ""
+    read -p "B2 Bucket name: " B2_BUCKET
+    read -p "B2 Path prefix [hetzner-ex44]: " B2_PATH_PREFIX
+    B2_PATH_PREFIX="${B2_PATH_PREFIX:-hetzner-ex44}"
+    read -p "B2 Account ID (or Key ID): " B2_ACCOUNT_ID
+
+    # Reboot after completion?
+    echo ""
+    read -p "Reboot automatically after bootstrap? [y/N]: " REBOOT_AFTER
+    REBOOT_AFTER_BOOTSTRAP=false
+    [[ "$REBOOT_AFTER" =~ ^[Yy]$ ]] && REBOOT_AFTER_BOOTSTRAP=true
+fi
+
+# ===========================================
+# Prompt for secrets (always required)
+# ===========================================
+echo ""
+echo "--- Secrets (required each run) ---"
+
+# Tailscale - check if already connected
+if tailscale status &>/dev/null 2>&1; then
+    echo "Tailscale already connected, skipping auth key."
+    TAILSCALE_AUTHKEY=""
+else
+    read -p "Tailscale auth key (tskey-auth-...): " TAILSCALE_AUTHKEY
+    if [[ -z "$TAILSCALE_AUTHKEY" ]]; then
+        echo "ERROR: Tailscale auth key is required"
+        exit 1
+    fi
+fi
+
+# B2 secrets
 BACKUP_CONFIGURED=false
 RESTORE_FROM_BACKUP=false
 
-if [[ -n "$B2_BUCKET" && -n "$B2_ACCOUNT_ID" && -n "$B2_APPLICATION_KEY" ]]; then
-    read -sp "Backup encryption password: " RESTIC_PASSWORD
-    echo ""
-    read -sp "Confirm encryption password: " RESTIC_PASSWORD_CONFIRM
-    echo ""
+if [[ -n "$B2_BUCKET" && -n "$B2_ACCOUNT_ID" ]]; then
+    read -p "B2 Application Key: " B2_APPLICATION_KEY
 
-    if [[ "$RESTIC_PASSWORD" != "$RESTIC_PASSWORD_CONFIRM" ]]; then
-        echo "ERROR: Passwords do not match"
-        exit 1
-    fi
+    if [[ -n "$B2_APPLICATION_KEY" ]]; then
+        read -sp "Backup encryption password: " RESTIC_PASSWORD
+        echo ""
+        read -sp "Confirm encryption password: " RESTIC_PASSWORD_CONFIRM
+        echo ""
 
-    BACKUP_CONFIGURED=true
+        if [[ "$RESTIC_PASSWORD" != "$RESTIC_PASSWORD_CONFIRM" ]]; then
+            echo "ERROR: Passwords do not match"
+            exit 1
+        fi
 
-    # Check if backup exists (test connection)
-    echo ""
-    echo "Checking for existing backup..."
-    export B2_ACCOUNT_ID B2_APPLICATION_KEY RESTIC_PASSWORD
-    export RESTIC_REPOSITORY="b2:$B2_BUCKET:$B2_PATH_PREFIX/$HARDWARE_UUID"
+        BACKUP_CONFIGURED=true
 
-    if restic snapshots &>/dev/null 2>&1; then
-        echo "Found existing backup!"
-        read -p "Restore from backup after setup? [y/N]: " RESTORE_CONFIRM
-        [[ "$RESTORE_CONFIRM" =~ ^[Yy]$ ]] && RESTORE_FROM_BACKUP=true
+        # Check if backup exists (test connection)
+        echo ""
+        echo "Checking for existing backup..."
+        export B2_ACCOUNT_ID B2_APPLICATION_KEY RESTIC_PASSWORD
+        export RESTIC_REPOSITORY="b2:$B2_BUCKET:$B2_PATH_PREFIX/$HARDWARE_UUID"
+
+        if restic snapshots &>/dev/null 2>&1; then
+            echo "Found existing backup!"
+            read -p "Restore from backup after setup? [y/N]: " RESTORE_CONFIRM
+            [[ "$RESTORE_CONFIRM" =~ ^[Yy]$ ]] && RESTORE_FROM_BACKUP=true
+        else
+            echo "No existing backup found. Will create initial backup."
+        fi
+
+        # Unset for now, will re-export when needed
+        unset B2_ACCOUNT_ID B2_APPLICATION_KEY RESTIC_PASSWORD RESTIC_REPOSITORY
     else
-        echo "No existing backup found. Will create initial backup."
+        echo "Skipping backup configuration (no application key provided)."
     fi
-
-    # Unset for now, will re-export when needed
-    unset B2_ACCOUNT_ID B2_APPLICATION_KEY RESTIC_PASSWORD RESTIC_REPOSITORY
 fi
 
-# Reboot after completion?
-echo ""
-read -p "Reboot automatically after bootstrap? [y/N]: " REBOOT_AFTER
-REBOOT_AFTER_BOOTSTRAP=false
-[[ "$REBOOT_AFTER" =~ ^[Yy]$ ]] && REBOOT_AFTER_BOOTSTRAP=true
+# Save configuration for future runs
+save_config
 
 echo ""
 echo "==========================================="

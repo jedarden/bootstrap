@@ -19,13 +19,113 @@ if [[ $EUID -ne 0 ]]; then
    exit 1
 fi
 
-# Prompt for Tailscale auth key only (SSH key is in repo)
-read -p "Enter your Tailscale auth key (tskey-auth-...): " TAILSCALE_AUTHKEY
+# ===========================================
+# Collect all inputs upfront
+# ===========================================
+echo ""
+echo "Enter configuration values. Script will run unattended after this."
+echo ""
 
+# Hostname
+CURRENT_HOSTNAME=$(hostname)
+read -p "Hostname [$CURRENT_HOSTNAME]: " NEW_HOSTNAME
+NEW_HOSTNAME="${NEW_HOSTNAME:-$CURRENT_HOSTNAME}"
+
+# Users to create
+echo ""
+echo "Users to create (enter each username, empty line to finish)"
+USERS=()
+while true; do
+    if [[ ${#USERS[@]} -eq 0 ]]; then
+        read -p "Username (or Enter for default 'coding'): " USERNAME
+        if [[ -z "$USERNAME" ]]; then
+            USERS=("coding" "trading")
+            echo "Using default users: coding, trading"
+            break
+        fi
+    else
+        read -p "Username (or Enter to finish): " USERNAME
+        if [[ -z "$USERNAME" ]]; then
+            break
+        fi
+    fi
+    # Validate username (lowercase, alphanumeric, underscore, hyphen)
+    if [[ ! "$USERNAME" =~ ^[a-z_][a-z0-9_-]*$ ]]; then
+        echo "Invalid username. Use lowercase letters, numbers, underscore, hyphen."
+        continue
+    fi
+    USERS+=("$USERNAME")
+    echo "  Added: $USERNAME"
+done
+echo "Users to create: ${USERS[*]}"
+
+# Tailscale
+echo ""
+read -p "Tailscale auth key (tskey-auth-...): " TAILSCALE_AUTHKEY
 if [[ -z "$TAILSCALE_AUTHKEY" ]]; then
     echo "ERROR: Tailscale auth key is required"
     exit 1
 fi
+
+# B2 Backup configuration
+HARDWARE_UUID=$(cat /sys/class/dmi/id/product_uuid 2>/dev/null || echo "unknown")
+
+echo ""
+echo "Backblaze B2 Backup Configuration"
+echo "  Hardware UUID: $HARDWARE_UUID"
+echo "  (Leave Account ID empty to skip backup setup)"
+echo ""
+read -p "B2 Bucket name: " B2_BUCKET
+read -p "B2 Path prefix [hetzner-ex44]: " B2_PATH_PREFIX
+B2_PATH_PREFIX="${B2_PATH_PREFIX:-hetzner-ex44}"
+read -p "B2 Account ID (or Key ID): " B2_ACCOUNT_ID
+read -p "B2 Application Key: " B2_APPLICATION_KEY
+
+BACKUP_CONFIGURED=false
+RESTORE_FROM_BACKUP=false
+
+if [[ -n "$B2_BUCKET" && -n "$B2_ACCOUNT_ID" && -n "$B2_APPLICATION_KEY" ]]; then
+    read -sp "Backup encryption password: " RESTIC_PASSWORD
+    echo ""
+    read -sp "Confirm encryption password: " RESTIC_PASSWORD_CONFIRM
+    echo ""
+
+    if [[ "$RESTIC_PASSWORD" != "$RESTIC_PASSWORD_CONFIRM" ]]; then
+        echo "ERROR: Passwords do not match"
+        exit 1
+    fi
+
+    BACKUP_CONFIGURED=true
+
+    # Check if backup exists (test connection)
+    echo ""
+    echo "Checking for existing backup..."
+    export B2_ACCOUNT_ID B2_APPLICATION_KEY RESTIC_PASSWORD
+    export RESTIC_REPOSITORY="b2:$B2_BUCKET:$B2_PATH_PREFIX/$HARDWARE_UUID"
+
+    if restic snapshots &>/dev/null 2>&1; then
+        echo "Found existing backup!"
+        read -p "Restore from backup after setup? [y/N]: " RESTORE_CONFIRM
+        [[ "$RESTORE_CONFIRM" =~ ^[Yy]$ ]] && RESTORE_FROM_BACKUP=true
+    else
+        echo "No existing backup found. Will create initial backup."
+    fi
+
+    # Unset for now, will re-export when needed
+    unset B2_ACCOUNT_ID B2_APPLICATION_KEY RESTIC_PASSWORD RESTIC_REPOSITORY
+fi
+
+# Reboot after completion?
+echo ""
+read -p "Reboot automatically after bootstrap? [y/N]: " REBOOT_AFTER
+REBOOT_AFTER_BOOTSTRAP=false
+[[ "$REBOOT_AFTER" =~ ^[Yy]$ ]] && REBOOT_AFTER_BOOTSTRAP=true
+
+echo ""
+echo "==========================================="
+echo "Configuration complete. Starting bootstrap..."
+echo "==========================================="
+echo ""
 
 # Fetch SSH keys from repo
 echo "Fetching SSH public keys from repo..."
@@ -43,12 +143,88 @@ SSH_PUBLIC_KEYS="$SSH_KEY_1"
 $SSH_KEY_2"
 
 echo ""
-echo "=== Step 1: System Update ==="
+echo "=== Step 1: Configure Hostname ==="
+CURRENT_SET_HOSTNAME=$(hostname)
+if [[ "$CURRENT_SET_HOSTNAME" != "$NEW_HOSTNAME" ]]; then
+    echo "Setting hostname to: $NEW_HOSTNAME"
+    hostnamectl set-hostname "$NEW_HOSTNAME"
+else
+    echo "Hostname already set to: $NEW_HOSTNAME"
+fi
+
+# Update /etc/hosts (idempotent)
+if ! grep -q "127.0.1.1.*$NEW_HOSTNAME" /etc/hosts; then
+    # Remove any existing 127.0.1.1 line and add new one
+    sed -i '/127.0.1.1/d' /etc/hosts
+    echo "127.0.1.1	$NEW_HOSTNAME" >> /etc/hosts
+    echo "Updated /etc/hosts"
+else
+    echo "/etc/hosts already configured"
+fi
+
+echo ""
+echo "=== Step 2: Configure Timezone, Locale, NTP, and DNS ==="
+
+# Set timezone to America/New_York (idempotent)
+CURRENT_TZ=$(timedatectl show --property=Timezone --value 2>/dev/null || echo "")
+if [[ "$CURRENT_TZ" != "America/New_York" ]]; then
+    echo "Setting timezone to America/New_York..."
+    timedatectl set-timezone America/New_York
+else
+    echo "Timezone already set to America/New_York"
+fi
+
+# Configure locale (UTF-8) - idempotent
+if ! locale -a 2>/dev/null | grep -q "en_US.utf8"; then
+    echo "Configuring locale (en_US.UTF-8)..."
+    apt-get install -y locales
+    sed -i 's/# en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen
+    locale-gen en_US.UTF-8
+    update-locale LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8
+else
+    echo "Locale en_US.UTF-8 already configured"
+fi
+
+# Enable NTP (idempotent)
+if [[ "$(timedatectl show --property=NTP --value 2>/dev/null)" != "yes" ]]; then
+    echo "Enabling NTP time synchronization..."
+    timedatectl set-ntp true
+else
+    echo "NTP already enabled"
+fi
+
+# Configure DNS to use Cloudflare (1.1.1.1) - idempotent
+echo "Configuring DNS (Cloudflare 1.1.1.1)..."
+mkdir -p /etc/systemd/resolved.conf.d
+cat > /etc/systemd/resolved.conf.d/dns.conf << 'DNSCONF'
+[Resolve]
+DNS=1.1.1.1 1.0.0.1
+FallbackDNS=8.8.8.8 8.8.4.4
+DNSOverTLS=opportunistic
+DNSCONF
+
+# Restart systemd-resolved if running
+if systemctl is-active --quiet systemd-resolved; then
+    systemctl restart systemd-resolved
+fi
+
+# Ensure resolv.conf points to systemd-resolved
+if [[ ! -L /etc/resolv.conf ]] || [[ "$(readlink /etc/resolv.conf)" != "../run/systemd/resolve/stub-resolv.conf" ]]; then
+    ln -sf ../run/systemd/resolve/stub-resolv.conf /etc/resolv.conf 2>/dev/null || true
+fi
+
+# Verify settings
+echo "Timezone: $(timedatectl show --property=Timezone --value)"
+echo "NTP: $(timedatectl show --property=NTP --value)"
+echo "DNS: $(resolvectl status 2>/dev/null | grep "DNS Servers" | head -1 || echo "configured")"
+
+echo ""
+echo "=== Step 3: System Update ==="
 apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get upgrade -y
 
 echo ""
-echo "=== Step 2: Installing Packages ==="
+echo "=== Step 4: Installing Packages ==="
 
 # Core utilities
 apt-get install -y \
@@ -111,13 +287,17 @@ apt-get install -y \
     nodejs \
     npm
 
-# GitHub CLI
-echo "Installing GitHub CLI..."
-curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
-chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg
-echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null
-apt-get update
-apt-get install -y gh
+# GitHub CLI (idempotent)
+if ! command -v gh &>/dev/null; then
+    echo "Installing GitHub CLI..."
+    curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+    chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+    apt-get update
+    apt-get install -y gh
+else
+    echo "GitHub CLI already installed"
+fi
 
 # System tools
 apt-get install -y \
@@ -129,8 +309,36 @@ apt-get install -y \
     vnstat
 
 echo ""
-echo "=== Step 3: Creating Users ==="
-USERS=("coding" "trading")
+echo "=== Step 5: Installing kubectl ==="
+
+# Install kubectl if not present (idempotent)
+if command -v kubectl &>/dev/null; then
+    echo "kubectl already installed: $(kubectl version --client --short 2>/dev/null || kubectl version --client)"
+else
+    KUBECTL_VERSION=$(curl -L -s https://dl.k8s.io/release/stable.txt)
+    ARCH=$(dpkg --print-architecture)
+    echo "Installing kubectl $KUBECTL_VERSION for $ARCH..."
+
+    curl -LO "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${ARCH}/kubectl"
+    curl -LO "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${ARCH}/kubectl.sha256"
+
+    # Verify checksum
+    echo "$(cat kubectl.sha256)  kubectl" | sha256sum --check
+    if [[ $? -ne 0 ]]; then
+        echo "ERROR: kubectl checksum verification failed"
+        exit 1
+    fi
+
+    chmod +x kubectl
+    mv kubectl /usr/local/bin/kubectl
+    rm kubectl.sha256
+
+    echo "kubectl installed: $(kubectl version --client --short 2>/dev/null || kubectl version --client)"
+fi
+
+echo ""
+echo "=== Step 6: Creating Users ==="
+echo "Creating users: ${USERS[*]}"
 
 for user in "${USERS[@]}"; do
     echo "Creating user: $user"
@@ -151,8 +359,9 @@ for user in "${USERS[@]}"; do
     mkdir -p "/home/$user/workspace"
     chown -R "$user:$user" "/home/$user"
 
-    # Configure bashrc
-    cat >> "/home/$user/.bashrc" << 'BASHRC'
+    # Configure bashrc (idempotent - check for marker)
+    if ! grep -q "# === Security: Isolated temp directory ===" "/home/$user/.bashrc" 2>/dev/null; then
+        cat >> "/home/$user/.bashrc" << 'BASHRC'
 
 # === Security: Isolated temp directory ===
 export TMPDIR="$HOME/.tmp"
@@ -196,6 +405,7 @@ shopt -s histappend
 [ -f /usr/share/doc/fzf/examples/key-bindings.bash ] && source /usr/share/doc/fzf/examples/key-bindings.bash
 [ -f /usr/share/doc/fzf/examples/completion.bash ] && source /usr/share/doc/fzf/examples/completion.bash
 BASHRC
+    fi
 
     chown "$user:$user" "/home/$user/.bashrc"
 
@@ -220,7 +430,7 @@ set -g default-terminal "screen-256color"
 set -sg escape-time 10
 
 # History
-set -g history-limit 50000
+set -g history-limit 10000
 
 # Split panes with | and -
 bind | split-window -h -c "#{pane_current_path}"
@@ -233,8 +443,12 @@ TMUXCONF
 done
 
 echo ""
-echo "=== Step 4: SSH Hardening ==="
-cat > /etc/ssh/sshd_config.d/hardening.conf << 'SSHCONF'
+echo "=== Step 7: SSH Hardening ==="
+
+# Build AllowUsers list from configured users
+ALLOW_USERS_LIST="${USERS[*]}"
+
+cat > /etc/ssh/sshd_config.d/hardening.conf << SSHCONF
 # === SSH Hardening Configuration ===
 
 # Authentication
@@ -246,8 +460,8 @@ AuthenticationMethods publickey
 ChallengeResponseAuthentication no
 UsePAM yes
 
-# Allowed users
-AllowUsers coding trading
+# Allowed users (dynamically configured)
+AllowUsers $ALLOW_USERS_LIST
 
 # Security limits
 MaxAuthTries 3
@@ -282,7 +496,7 @@ sshd -t || {
 }
 
 echo ""
-echo "=== Step 5: Kernel Hardening (sysctl) ==="
+echo "=== Step 8: Kernel Hardening (sysctl) ==="
 cat > /etc/sysctl.d/99-hardening.conf << 'SYSCTL'
 # === Kernel Hardening ===
 
@@ -339,7 +553,7 @@ SYSCTL
 sysctl --system
 
 echo ""
-echo "=== Step 6: Firewall Configuration ==="
+echo "=== Step 9: Firewall Configuration ==="
 # Reset UFW to defaults
 ufw --force reset
 
@@ -361,47 +575,333 @@ ufw --force enable
 ufw status verbose
 
 echo ""
-echo "=== Step 7: Installing Tailscale ==="
-curl -fsSL https://tailscale.com/install.sh | sh
+echo "=== Step 10: Installing Tailscale ==="
 
-# Start Tailscale with SSH enabled
-tailscale up --authkey="$TAILSCALE_AUTHKEY" --ssh
+# Install Tailscale if not present (idempotent)
+if ! command -v tailscale &>/dev/null; then
+    echo "Installing Tailscale..."
+    curl -fsSL https://tailscale.com/install.sh | sh
+else
+    echo "Tailscale already installed"
+fi
+
+# Start Tailscale with SSH enabled (idempotent)
+if ! tailscale status &>/dev/null; then
+    echo "Connecting to Tailscale..."
+    tailscale up --authkey="$TAILSCALE_AUTHKEY" --ssh
+else
+    echo "Tailscale already connected"
+fi
 
 echo "Tailscale status:"
 tailscale status
 
 echo ""
-echo "=== Step 8: Installing Docker ==="
-curl -fsSL https://get.docker.com | sh
+echo "=== Step 11: Installing Claude Code ==="
 
-# Add users to docker group
+# Install Claude Code for root (idempotent - installer handles updates)
+if [[ ! -x "/root/.claude/local/bin/claude" ]]; then
+    echo "Installing Claude Code for root..."
+    curl -fsSL https://claude.ai/install.sh | bash
+else
+    echo "Claude Code already installed for root"
+fi
+
+# Add Claude Code to PATH for all users (idempotent)
+if [[ ! -f /etc/profile.d/claude-code.sh ]]; then
+    echo "export PATH=\"\$HOME/.claude/local/bin:\$PATH\"" > /etc/profile.d/claude-code.sh
+    chmod 644 /etc/profile.d/claude-code.sh
+fi
+
+# Install Claude Code for each user (idempotent)
 for user in "${USERS[@]}"; do
-    usermod -aG docker "$user"
+    if [[ ! -x "/home/$user/.claude/local/bin/claude" ]]; then
+        echo "Installing Claude Code for user: $user"
+        su - "$user" -c 'curl -fsSL https://claude.ai/install.sh | bash'
+    else
+        echo "Claude Code already installed for $user"
+    fi
 done
 
-# Enable Docker service
-systemctl enable docker
-systemctl start docker
+echo ""
+echo "=== Step 12: Setting Up start.sh for Users ==="
+# Create start.sh for each user with tmux + Claude Code setup
+for user in "${USERS[@]}"; do
+    echo "Setting up start.sh for user: $user"
+    cat > "/home/$user/start.sh" << 'STARTSH'
+#!/bin/bash
 
-# Docker hardening
-mkdir -p /etc/docker
-cat > /etc/docker/daemon.json << 'DOCKERCONF'
-{
-    "icc": false,
-    "userns-remap": "default",
-    "no-new-privileges": true,
-    "log-driver": "json-file",
-    "log-opts": {
-        "max-size": "10m",
-        "max-file": "3"
-    }
+# Get the directory where this script is located
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TMUX_DIR="$SCRIPT_DIR/.tmux"
+TMUX_CONF="$TMUX_DIR/tmux.conf"
+TPM_DIR="$TMUX_DIR/plugins/tpm"
+
+# Phonetic alphabet for tmux session naming
+PHONETIC_ALPHABET=(
+    "alpha" "bravo" "charlie" "delta" "echo" "foxtrot" "golf" "hotel"
+    "india" "juliet" "kilo" "lima" "mike" "november" "oscar" "papa"
+    "quebec" "romeo" "sierra" "tango" "uniform" "victor" "whiskey"
+    "xray" "yankee" "zulu"
+)
+
+# Find the first available phonetic name for a tmux session
+find_available_session_name() {
+    for name in "${PHONETIC_ALPHABET[@]}"; do
+        if ! tmux has-session -t "$name" 2>/dev/null; then
+            echo "$name"
+            return 0
+        fi
+    done
+    return 1
 }
-DOCKERCONF
 
-systemctl restart docker
+# Install TPM (Tmux Plugin Manager) and plugins
+install_tpm() {
+    if [[ ! -d "$TPM_DIR" ]]; then
+        echo "Installing Tmux Plugin Manager..."
+        git clone https://github.com/tmux-plugins/tpm "$TPM_DIR"
+    fi
+}
+
+# Install tmux plugins
+install_plugins() {
+    if [[ -x "$TPM_DIR/bin/install_plugins" ]]; then
+        echo "Installing tmux plugins..."
+        "$TPM_DIR/bin/install_plugins"
+    fi
+}
+
+# Install or update Claude Code using native installer
+install_claude_code() {
+    echo "Installing/updating Claude Code via native installer..."
+    curl -fsSL https://claude.ai/install.sh | bash
+}
+
+# Get installed Claude Code version (returns empty string if not installed)
+get_installed_claude_version() {
+    if command -v claude &>/dev/null; then
+        claude --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1
+    fi
+}
+
+# Get latest available Claude Code version
+get_latest_claude_version() {
+    local CLAUDE_RELEASES_URL="https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases/latest"
+    curl -fsSL "$CLAUDE_RELEASES_URL" 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1
+}
+
+# Compare semantic versions: returns 0 if v1 < v2, 1 otherwise
+version_lt() {
+    local v1="$1" v2="$2"
+    [[ "$v1" == "$v2" ]] && return 1
+    local lowest
+    lowest=$(printf '%s\n%s' "$v1" "$v2" | sort -V | head -n1)
+    [[ "$v1" == "$lowest" ]]
+}
+
+# Check if Claude Code needs installation or update
+check_and_update_claude() {
+    local installed_version latest_version
+
+    # Ensure PATH includes common install location
+    if [[ -x "$HOME/.claude/local/bin/claude" ]]; then
+        export PATH="$HOME/.claude/local/bin:$PATH"
+    fi
+
+    installed_version=$(get_installed_claude_version)
+    latest_version=$(get_latest_claude_version)
+
+    if [[ -z "$installed_version" ]]; then
+        echo "Claude Code not found. Installing..."
+        install_claude_code
+        if [[ -f "$HOME/.bashrc" ]]; then
+            source "$HOME/.bashrc" 2>/dev/null || true
+        fi
+        if [[ -x "$HOME/.claude/local/bin/claude" ]]; then
+            export PATH="$HOME/.claude/local/bin:$PATH"
+        fi
+        if ! command -v claude &>/dev/null; then
+            echo "Error: Claude Code installation failed."
+            exit 1
+        fi
+        echo "Claude Code installed successfully: $(get_installed_claude_version)"
+    elif [[ -z "$latest_version" ]]; then
+        echo "Warning: Could not fetch latest Claude Code version. Skipping update check."
+        echo "Current version: $installed_version"
+    elif version_lt "$installed_version" "$latest_version"; then
+        echo "Claude Code update available: $installed_version -> $latest_version"
+        install_claude_code
+        local new_version
+        new_version=$(get_installed_claude_version)
+        echo "Claude Code updated: $installed_version -> $new_version"
+    else
+        echo "Claude Code is up to date: $installed_version"
+    fi
+}
+
+check_and_update_claude
+
+# Ensure tmux config directory exists
+mkdir -p "$TMUX_DIR/plugins"
+mkdir -p "$TMUX_DIR/resurrect"
+
+# Create default tmux.conf if it doesn't exist
+if [[ ! -f "$TMUX_CONF" ]]; then
+    cat > "$TMUX_CONF" << 'TMUXCONF'
+# Remap prefix to Ctrl-a
+set -g prefix C-a
+unbind C-b
+bind C-a send-prefix
+
+# Enable mouse
+set -g mouse on
+
+# Start windows at 1
+set -g base-index 1
+setw -g pane-base-index 1
+
+# Better colors
+set -g default-terminal "screen-256color"
+
+# Faster escape
+set -sg escape-time 10
+
+# History
+set -g history-limit 10000
+
+# Split panes with | and -
+bind | split-window -h -c "#{pane_current_path}"
+bind - split-window -v -c "#{pane_current_path}"
+
+# Reload config
+bind r source-file ~/.tmux.conf \; display "Reloaded!"
+
+# TPM plugins
+set -g @plugin 'tmux-plugins/tpm'
+set -g @plugin 'tmux-plugins/tmux-sensible'
+set -g @plugin 'tmux-plugins/tmux-resurrect'
+
+# Initialize TPM
+run '~/.tmux/plugins/tpm/tpm'
+TMUXCONF
+fi
+
+# Install TPM and plugins if needed
+install_tpm
+install_plugins
+
+# Source updated config for any existing tmux server
+if tmux list-sessions &>/dev/null; then
+    echo "Updating tmux configuration..."
+    tmux source-file "$TMUX_CONF" 2>/dev/null || true
+fi
+
+# Find an available session name
+SESSION_NAME=$(find_available_session_name)
+
+if [[ -z "$SESSION_NAME" ]]; then
+    echo "Error: All phonetic alphabet session names are in use (alpha through zulu)."
+    echo "Please close an existing tmux session and try again."
+    exit 1
+fi
+
+# Create the tmux session with our config and start claude code
+echo "Creating tmux session: $SESSION_NAME"
+tmux -f "$TMUX_CONF" new-session -d -s "$SESSION_NAME" -c "$SCRIPT_DIR"
+tmux send-keys -t "$SESSION_NAME" "unset CLAUDECODE && exec claude --dangerously-skip-permissions" Enter
+
+# Attach to the session
+echo "Attaching to session: $SESSION_NAME"
+tmux -f "$TMUX_CONF" attach-session -t "$SESSION_NAME"
+STARTSH
+
+    chmod +x "/home/$user/start.sh"
+    chown "$user:$user" "/home/$user/start.sh"
+done
 
 echo ""
-echo "=== Step 9: Security Services ==="
+echo "=== Step 13: Installing Rootless Docker ==="
+
+# Install dependencies for rootless Docker (idempotent)
+apt-get install -y \
+    uidmap \
+    dbus-user-session \
+    fuse-overlayfs \
+    slirp4netns
+
+# Install Docker if not present (idempotent)
+if ! command -v docker &>/dev/null; then
+    echo "Installing Docker..."
+    curl -fsSL https://get.docker.com | sh
+else
+    echo "Docker already installed"
+fi
+
+# Disable system Docker daemon - we'll use rootless per-user (idempotent)
+systemctl disable --now docker.service docker.socket 2>/dev/null || true
+
+# Configure rootless Docker for each user
+for user in "${USERS[@]}"; do
+    echo "Setting up rootless Docker for user: $user"
+
+    # Get user's UID
+    USER_UID=$(id -u "$user")
+
+    # Enable lingering so user services start at boot
+    loginctl enable-linger "$user"
+
+    # Set up subuid/subgid ranges for user namespace mapping
+    if ! grep -q "^$user:" /etc/subuid; then
+        echo "$user:100000:65536" >> /etc/subuid
+    fi
+    if ! grep -q "^$user:" /etc/subgid; then
+        echo "$user:100000:65536" >> /etc/subgid
+    fi
+
+    # Create XDG_RUNTIME_DIR if needed
+    mkdir -p "/run/user/$USER_UID"
+    chown "$user:$user" "/run/user/$USER_UID"
+    chmod 700 "/run/user/$USER_UID"
+
+    # Install rootless Docker as the user (idempotent - checks if already installed)
+    if [[ ! -f "/home/$user/.config/systemd/user/docker.service" ]]; then
+        su - "$user" -c 'dockerd-rootless-setuptool.sh install' || {
+            echo "Warning: Rootless Docker setup for $user may need manual completion after first login"
+        }
+    else
+        echo "Rootless Docker already configured for $user"
+    fi
+
+    # Add Docker environment to user's bashrc (idempotent)
+    if ! grep -q "# === Rootless Docker ===" "/home/$user/.bashrc" 2>/dev/null; then
+        cat >> "/home/$user/.bashrc" << 'DOCKERENV'
+
+# === Rootless Docker ===
+export PATH="$HOME/bin:$PATH"
+export DOCKER_HOST="unix://$XDG_RUNTIME_DIR/docker.sock"
+DOCKERENV
+    fi
+
+    # Create convenience script to start rootless Docker daemon
+    mkdir -p "/home/$user/bin"
+    cat > "/home/$user/bin/start-docker" << 'STARTDOCKER'
+#!/bin/bash
+# Start rootless Docker daemon if not running
+if ! docker info &>/dev/null; then
+    echo "Starting rootless Docker daemon..."
+    systemctl --user start docker
+fi
+docker info
+STARTDOCKER
+    chmod +x "/home/$user/bin/start-docker"
+    chown -R "$user:$user" "/home/$user/bin"
+done
+
+echo "Rootless Docker installed. Each user has isolated Docker storage in ~/.local/share/docker/"
+
+echo ""
+echo "=== Step 14: Security Services ==="
 
 # Configure fail2ban
 cat > /etc/fail2ban/jail.local << 'FAIL2BAN'
@@ -480,7 +980,260 @@ APT::Periodic::AutocleanInterval "7";
 AUTOUPGRADE
 
 echo ""
-echo "=== Step 10: Final Hardening ==="
+echo "=== Step 15: Backup Configuration (restic + B2) ==="
+
+# Install restic
+apt-get install -y restic
+
+echo "Hardware UUID: $HARDWARE_UUID"
+
+if $BACKUP_CONFIGURED; then
+    # Create backup configuration directory
+    mkdir -p /etc/restic
+    chmod 700 /etc/restic
+
+    # Store credentials securely
+    cat > /etc/restic/b2.env << ENVFILE
+export B2_ACCOUNT_ID="$B2_ACCOUNT_ID"
+export B2_APPLICATION_KEY="$B2_APPLICATION_KEY"
+export RESTIC_REPOSITORY="b2:$B2_BUCKET:$B2_PATH_PREFIX/$HARDWARE_UUID"
+export RESTIC_PASSWORD="$RESTIC_PASSWORD"
+export RESTIC_CACHE_DIR="/var/cache/restic"
+# Optimizations for B2 API call reduction
+export RESTIC_PACK_SIZE="64"
+ENVFILE
+    chmod 600 /etc/restic/b2.env
+
+    # Create cache directory
+    mkdir -p /var/cache/restic
+    chmod 700 /var/cache/restic
+
+    # Source credentials
+    source /etc/restic/b2.env
+
+    if $RESTORE_FROM_BACKUP; then
+        echo "Restoring from backup..."
+
+        # Restore home directories
+        restic restore latest --target / --include /home
+
+        # Restore Tailscale state
+        restic restore latest --target / --include /var/lib/tailscale
+
+        # Fix ownership
+        for user in "${USERS[@]}"; do
+            if [[ -d "/home/$user" ]]; then
+                chown -R "$user:$user" "/home/$user"
+            fi
+        done
+
+        echo "Restore complete!"
+    else
+        # Check if repo exists, if not initialize and create first backup
+        if ! restic snapshots &>/dev/null 2>&1; then
+            echo "Initializing new backup repository..."
+            restic init
+
+            echo ""
+            echo "Creating initial backup..."
+            restic backup \
+                --pack-size 64 \
+                --one-file-system \
+                --exclude='.cache' \
+                --exclude='node_modules' \
+                --exclude='.npm' \
+                --exclude='__pycache__' \
+                --exclude='.venv' \
+                --exclude='venv' \
+                --exclude='.local/share/docker/overlay2' \
+                --exclude='.local/share/docker/buildkit' \
+                --exclude='.local/share/docker/tmp' \
+                --exclude='*.log' \
+                --exclude='*.tmp' \
+                /home \
+                /var/lib/tailscale
+
+            echo "Initial backup complete. Data is encrypted at rest in B2."
+            echo "Encryption algorithm: AES-256 in CTR mode + Poly1305 MAC"
+        else
+            echo "Backup repository exists. Skipping initial backup."
+        fi
+    fi
+
+    echo ""
+    echo "=========================================="
+    echo "IMPORTANT: Save your encryption password!"
+    echo "=========================================="
+    echo "Without this password, backups CANNOT be restored."
+    echo "B2 stores only encrypted data - Backblaze cannot help recover it."
+    echo ""
+    echo "Bucket: $B2_BUCKET"
+    echo "Path: $B2_PATH_PREFIX/$HARDWARE_UUID"
+    echo "Hardware UUID: $HARDWARE_UUID"
+    echo "=========================================="
+else
+    echo "Skipping B2 backup configuration (no credentials provided)."
+fi
+
+# Create optimized backup script
+cat > /usr/local/bin/backup-home << 'BACKUPSCRIPT'
+#!/bin/bash
+set -euo pipefail
+
+# Restic backup to B2 with optimizations for minimal API calls
+# Usage: backup-home [--prune]
+
+PRUNE=false
+[[ "${1:-}" == "--prune" ]] && PRUNE=true
+
+# Load B2 credentials
+if [[ ! -f /etc/restic/b2.env ]]; then
+    echo "ERROR: Backup not configured. Run bootstrap or create /etc/restic/b2.env"
+    exit 1
+fi
+source /etc/restic/b2.env
+
+echo "Starting backup to $RESTIC_REPOSITORY..."
+echo "Timestamp: $(date)"
+
+# Backup with optimizations:
+# --pack-size 64: Larger packs = fewer B2 API calls
+# --exclude: Skip caches and recreatable data
+# --one-file-system: Don't cross filesystem boundaries
+restic backup \
+    --pack-size 64 \
+    --one-file-system \
+    --exclude='.cache' \
+    --exclude='node_modules' \
+    --exclude='.npm' \
+    --exclude='__pycache__' \
+    --exclude='.venv' \
+    --exclude='venv' \
+    --exclude='.local/share/docker/overlay2' \
+    --exclude='.local/share/docker/buildkit' \
+    --exclude='.local/share/docker/tmp' \
+    --exclude='*.log' \
+    --exclude='*.tmp' \
+    /home \
+    /var/lib/tailscale
+
+echo "Backup complete."
+
+# Prune old snapshots (API-intensive, do sparingly)
+if $PRUNE; then
+    echo "Pruning old snapshots..."
+    restic forget \
+        --keep-daily 7 \
+        --keep-weekly 4 \
+        --keep-monthly 6 \
+        --prune
+    echo "Prune complete."
+fi
+
+# Quick integrity check (5% of data, minimizes API calls)
+echo "Running integrity check..."
+restic check --read-data-subset=5%
+echo "Check complete."
+BACKUPSCRIPT
+
+chmod +x /usr/local/bin/backup-home
+
+# Create restore script
+cat > /usr/local/bin/restore-home << 'RESTORESCRIPT'
+#!/bin/bash
+set -euo pipefail
+
+# Restore from restic B2 backup
+# Usage: restore-home [snapshot-id]
+#        restore-home latest
+#        restore-home          # interactive snapshot selection
+
+# Load B2 credentials
+if [[ ! -f /etc/restic/b2.env ]]; then
+    echo "ERROR: Backup not configured. Create /etc/restic/b2.env"
+    exit 1
+fi
+source /etc/restic/b2.env
+
+SNAPSHOT="${1:-}"
+
+if [[ -z "$SNAPSHOT" ]]; then
+    echo "Available snapshots:"
+    restic snapshots
+    echo ""
+    read -p "Enter snapshot ID to restore (or 'latest'): " SNAPSHOT
+fi
+
+if [[ -z "$SNAPSHOT" ]]; then
+    echo "ERROR: No snapshot specified."
+    exit 1
+fi
+
+echo "Restoring snapshot: $SNAPSHOT"
+echo "This will overwrite existing files in /home and /var/lib/tailscale"
+read -p "Continue? [y/N]: " CONFIRM
+if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
+    echo "Aborted."
+    exit 0
+fi
+
+# Stop services that might interfere
+systemctl stop tailscaled 2>/dev/null || true
+
+# Restore
+restic restore "$SNAPSHOT" --target /
+
+# Fix ownership for users (detect from /home/*)
+for user_home in /home/*; do
+    if [[ -d "$user_home" ]]; then
+        user=$(basename "$user_home")
+        chown -R "$user:$user" "$user_home"
+    fi
+done
+
+# Restart services
+systemctl start tailscaled 2>/dev/null || true
+
+echo "Restore complete from snapshot: $SNAPSHOT"
+RESTORESCRIPT
+
+chmod +x /usr/local/bin/restore-home
+
+# Create list-backups script
+cat > /usr/local/bin/list-backups << 'LISTSCRIPT'
+#!/bin/bash
+source /etc/restic/b2.env 2>/dev/null || { echo "Backup not configured"; exit 1; }
+restic snapshots "$@"
+LISTSCRIPT
+chmod +x /usr/local/bin/list-backups
+
+# Set up automated daily backup (with weekly prune)
+cat > /etc/cron.d/restic-backup << 'CRONJOB'
+# Daily backup at 3 AM
+0 3 * * * root /usr/local/bin/backup-home >> /var/log/restic-backup.log 2>&1
+
+# Weekly prune on Sunday at 4 AM (reduces B2 API calls by batching cleanup)
+0 4 * * 0 root /usr/local/bin/backup-home --prune >> /var/log/restic-backup.log 2>&1
+CRONJOB
+
+# Create logrotate for backup logs
+cat > /etc/logrotate.d/restic-backup << 'LOGROTATE'
+/var/log/restic-backup.log {
+    weekly
+    rotate 4
+    compress
+    missingok
+    notifempty
+}
+LOGROTATE
+
+echo "Backup configuration complete."
+echo "  - Daily backups at 3 AM"
+echo "  - Weekly prune on Sundays at 4 AM"
+echo "  - Commands: backup-home, restore-home, list-backups"
+
+echo ""
+echo "=== Step 16: Final Hardening ==="
 
 # Secure shared memory
 if ! grep -q "tmpfs /run/shm" /etc/fstab; then
@@ -492,8 +1245,8 @@ chmod 700 /etc/cron.d /etc/cron.daily /etc/cron.hourly /etc/cron.monthly /etc/cr
 echo "root" > /etc/cron.allow
 echo "root" > /etc/at.allow
 
-# Secure tmp
-if ! grep -q "/tmp" /etc/fstab | grep -q "nosuid"; then
+# Secure tmp (idempotent - only add note if not present)
+if ! grep -q "noexec,nosuid,nodev to /tmp" /etc/fstab; then
     echo "# Note: Consider adding noexec,nosuid,nodev to /tmp mount" >> /etc/fstab
 fi
 
@@ -517,45 +1270,88 @@ install tipc /bin/true
 PROTOCONF
 
 # Set secure permissions on home directories
-chmod 750 /home/coding /home/trading
+for user in "${USERS[@]}"; do
+    chmod 750 "/home/$user"
+done
 
 # Restart SSH with new config
 systemctl restart sshd
 
 echo ""
-echo "=========================================="
+echo "=============================================="
 echo "=== Bootstrap Complete ==="
-echo "=========================================="
+echo "=============================================="
 echo ""
-echo "Server is hardened and ready."
+echo "INSTALLATION SUMMARY"
+echo "=============================================="
 echo ""
-echo "Users created: coding, trading"
+echo "Hostname:     $NEW_HOSTNAME"
+echo "Timezone:     America/New_York"
+echo "Locale:       en_US.UTF-8"
+echo "DNS:          1.1.1.1 (Cloudflare)"
+echo "Hardware ID:  $HARDWARE_UUID"
 echo ""
-TAILSCALE_HOSTNAME=$(tailscale status --json | jq -r '.Self.DNSName' | sed 's/\.$//')
-echo "Access via Tailscale:"
-echo "  ssh coding@$TAILSCALE_HOSTNAME"
-echo "  ssh trading@$TAILSCALE_HOSTNAME"
+echo "Users created:"
+for user in "${USERS[@]}"; do
+    echo "  - $user"
+done
 echo ""
-echo "Public IP SSH is blocked except from Hetzner rescue."
+TAILSCALE_HOSTNAME=$(tailscale status --json | jq -r '.Self.DNSName' | sed 's/\.$//' 2>/dev/null || echo "unknown")
+echo "Access via Tailscale SSH:"
+for user in "${USERS[@]}"; do
+    echo "  ssh $user@$TAILSCALE_HOSTNAME"
+done
 echo ""
-echo "Installed utilities:"
-echo "  System: htop, ncdu, duf, iotop, nload"
-echo "  Search: ripgrep (rg), fd, fzf, ag"
-echo "  Files:  bat, exa, tree"
-echo "  Net:    httpie, mtr, tcpdump"
+echo "Installed software:"
+echo "  - Claude Code (native installer)"
+echo "  - Rootless Docker (per-user isolation)"
+echo "  - kubectl (Kubernetes CLI)"
+echo "  - tmux (with mouse support, 10k scrollback)"
+echo "  - Modern CLI tools: ripgrep, fd, fzf, bat, exa, httpie"
 echo ""
-echo "Security features enabled:"
-echo "  - SSH hardened (key-only, no root)"
+echo "Security features:"
+echo "  - SSH hardened (key-only, no root, no password)"
 echo "  - UFW firewall (deny all except Tailscale)"
 echo "  - fail2ban (SSH brute force protection)"
 echo "  - auditd (system auditing)"
-echo "  - Automatic security updates"
+echo "  - Automatic security updates (unattended-upgrades)"
 echo "  - Kernel hardening (sysctl)"
-echo "  - Docker hardening"
+echo "  - AppArmor enabled"
 echo ""
-echo "Verify with:"
-echo "  ufw status"
-echo "  tailscale status"
-echo "  fail2ban-client status"
-echo "  auditctl -l"
+if $BACKUP_CONFIGURED; then
+echo "Backup configuration:"
+echo "  - Repository: b2:$B2_BUCKET:$B2_PATH_PREFIX/$HARDWARE_UUID"
+echo "  - Schedule: Daily at 3 AM, prune weekly"
+echo "  - Commands: backup-home, restore-home, list-backups"
+if $RESTORE_FROM_BACKUP; then
+echo "  - Status: Restored from existing backup"
+else
+echo "  - Status: Initial backup created"
+fi
+else
+echo "Backup: Not configured"
+fi
 echo ""
+echo "Quick start:"
+echo "  1. SSH to server: ssh ${USERS[0]}@$TAILSCALE_HOSTNAME"
+echo "  2. Run start.sh to launch Claude Code in tmux"
+echo ""
+echo "Verification commands:"
+echo "  ufw status              # Firewall rules"
+echo "  tailscale status        # Tailscale connection"
+echo "  fail2ban-client status  # Brute force protection"
+echo "  timedatectl             # Time/NTP status"
+echo "  resolvectl status       # DNS configuration"
+echo ""
+echo "=============================================="
+echo ""
+
+# Reboot if requested at start
+if $REBOOT_AFTER_BOOTSTRAP; then
+    echo "Rebooting in 5 seconds to apply all changes..."
+    sleep 5
+    reboot
+else
+    echo "NOTE: A reboot is recommended to apply all kernel and sysctl changes."
+    echo "Run 'reboot' when ready."
+fi

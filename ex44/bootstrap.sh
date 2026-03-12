@@ -340,18 +340,29 @@ DEBIAN_FRONTEND=noninteractive apt-get upgrade -y
 echo ""
 echo "=== Step 4: Installing Packages ==="
 
-# Core utilities
+# Helper function to install packages with fallback
+install_packages() {
+    local failed=()
+    for pkg in "$@"; do
+        if ! apt-get install -y "$pkg" 2>/dev/null; then
+            echo "Warning: Package '$pkg' not available, skipping..."
+            failed+=("$pkg")
+        fi
+    done
+    if [[ ${#failed[@]} -gt 0 ]]; then
+        echo "Skipped packages: ${failed[*]}"
+    fi
+}
+
+# Core utilities (required - fail if missing)
 apt-get install -y \
     curl \
     wget \
     git \
     tmux \
-    neovim \
     vim \
     htop \
-    ncdu \
     jq \
-    yq \
     unzip \
     zip \
     tree \
@@ -359,16 +370,26 @@ apt-get install -y \
     less \
     man-db
 
-# Modern CLI tools
-apt-get install -y \
+# Core utilities (optional - may not exist on all distros)
+install_packages neovim ncdu
+
+# Modern CLI tools (optional - names vary by distro)
+install_packages \
     ripgrep \
     fd-find \
     bat \
     fzf \
+    eza \
     exa \
-    duf \
     httpie \
     silversearcher-ag
+
+# yq - not in standard repos, install via binary
+if ! command -v yq &>/dev/null; then
+    echo "Installing yq from GitHub releases..."
+    YQ_VERSION=$(curl -sL "https://api.github.com/repos/mikefarah/yq/releases/latest" | jq -r '.tag_name') || YQ_VERSION="v4.40.5"
+    curl -sL "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_$(dpkg --print-architecture)" -o /usr/local/bin/yq && chmod +x /usr/local/bin/yq || echo "Warning: Failed to install yq"
+fi
 
 # Network tools
 apt-get install -y \
@@ -386,29 +407,33 @@ apt-get install -y \
     ufw \
     unattended-upgrades \
     apt-listchanges \
-    needrestart \
-    rkhunter \
-    chkrootkit \
-    auditd \
-    libpam-tmpdir
+    auditd
+
+# Security tools (optional)
+install_packages needrestart rkhunter chkrootkit libpam-tmpdir
 
 # Development tools
 apt-get install -y \
     build-essential \
     python3 \
     python3-pip \
-    python3-venv \
-    nodejs \
-    npm
+    python3-venv
+
+# Node.js (may need nodesource for newer versions)
+install_packages nodejs npm
 
 # GitHub CLI (idempotent)
 if ! command -v gh &>/dev/null; then
     echo "Installing GitHub CLI..."
-    curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
-    chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg
-    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null
-    apt-get update
-    apt-get install -y gh
+    if curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /tmp/githubcli.gpg; then
+        install -m 0644 /tmp/githubcli.gpg /usr/share/keyrings/githubcli-archive-keyring.gpg
+        echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+        apt-get update
+        apt-get install -y gh || echo "Warning: Failed to install GitHub CLI"
+        rm -f /tmp/githubcli.gpg
+    else
+        echo "Warning: Failed to fetch GitHub CLI keyring"
+    fi
 else
     echo "GitHub CLI already installed"
 fi
@@ -417,10 +442,10 @@ fi
 apt-get install -y \
     lsof \
     strace \
-    sysstat \
-    iotop \
-    nload \
-    vnstat
+    sysstat
+
+# System tools (optional)
+install_packages iotop nload vnstat duf
 
 echo ""
 echo "=== Step 5: Installing kubectl ==="
@@ -694,7 +719,10 @@ echo "=== Step 10: Installing Tailscale ==="
 # Install Tailscale if not present (idempotent)
 if ! command -v tailscale &>/dev/null; then
     echo "Installing Tailscale..."
-    curl -fsSL https://tailscale.com/install.sh | sh
+    if ! curl -fsSL https://tailscale.com/install.sh | sh; then
+        echo "ERROR: Tailscale installation failed"
+        exit 1
+    fi
 else
     echo "Tailscale already installed"
 fi
@@ -716,7 +744,9 @@ echo "=== Step 11: Installing Claude Code ==="
 # Install Claude Code for root (idempotent - installer handles updates)
 if [[ ! -x "/root/.claude/local/bin/claude" ]]; then
     echo "Installing Claude Code for root..."
-    curl -fsSL https://claude.ai/install.sh | bash
+    if ! curl -fsSL https://claude.ai/install.sh | bash; then
+        echo "Warning: Claude Code installation for root failed, continuing..."
+    fi
 else
     echo "Claude Code already installed for root"
 fi
@@ -731,7 +761,9 @@ fi
 for user in "${USERS[@]}"; do
     if [[ ! -x "/home/$user/.claude/local/bin/claude" ]]; then
         echo "Installing Claude Code for user: $user"
-        su - "$user" -c 'curl -fsSL https://claude.ai/install.sh | bash'
+        if ! su - "$user" -c 'curl -fsSL https://claude.ai/install.sh | bash'; then
+            echo "Warning: Claude Code installation for $user failed, continuing..."
+        fi
     else
         echo "Claude Code already installed for $user"
     fi
@@ -789,7 +821,10 @@ install_plugins() {
 # Install or update Claude Code using native installer
 install_claude_code() {
     echo "Installing/updating Claude Code via native installer..."
-    curl -fsSL https://claude.ai/install.sh | bash
+    if ! curl -fsSL https://claude.ai/install.sh | bash; then
+        echo "Warning: Claude Code installation failed"
+        return 1
+    fi
 }
 
 # Get installed Claude Code version (returns empty string if not installed)
@@ -947,7 +982,10 @@ apt-get install -y \
 # Install Docker if not present (idempotent)
 if ! command -v docker &>/dev/null; then
     echo "Installing Docker..."
-    curl -fsSL https://get.docker.com | sh
+    if ! curl -fsSL https://get.docker.com | sh; then
+        echo "ERROR: Docker installation failed"
+        exit 1
+    fi
 else
     echo "Docker already installed"
 fi

@@ -4,14 +4,14 @@ set -euo pipefail
 # Hetzner EX44 Bootstrap Script
 # Hardens a fresh Debian/Ubuntu install and sets up isolated dev workspaces
 #
-# Version: 1.0.0
+# Version: 1.0.1
 #
 # Usage (download and run - interactive prompts require terminal):
 #   curl -sLO https://raw.githubusercontent.com/jedarden/bootstrap/main/ex44/bootstrap.sh
 #   chmod +x bootstrap.sh
 #   ./bootstrap.sh
 
-VERSION="1.0.0"
+VERSION="1.0.1"
 
 # Handle --version flag
 if [[ "${1:-}" == "--version" ]] || [[ "${1:-}" == "-v" ]]; then
@@ -42,6 +42,19 @@ fi
 CONFIG_DIR="/etc/bootstrap"
 CONFIG_FILE="$CONFIG_DIR/config"
 HARDWARE_UUID=$(cat /sys/class/dmi/id/product_uuid 2>/dev/null || echo "unknown")
+
+# Initialize variables with defaults to avoid unbound variable errors
+NEW_HOSTNAME=""
+USERS=()
+B2_BUCKET=""
+B2_PATH_PREFIX=""
+B2_ACCOUNT_ID=""
+B2_APPLICATION_KEY=""
+RESTIC_PASSWORD=""
+REBOOT_AFTER_BOOTSTRAP=false
+BACKUP_CONFIGURED=false
+RESTORE_FROM_BACKUP=false
+TAILSCALE_AUTHKEY=""
 
 # Function to save configuration (non-sensitive values only)
 save_config() {

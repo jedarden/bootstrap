@@ -1,7 +1,10 @@
+for user in "${USERS[@]}"; do
+    echo "Setting up start.sh for user: $user"
+    cat > "/home/$user/start.sh" << 'STARTSH'
 #!/bin/bash
 
 # start.sh - Tmux + Claude Code launcher with self-update
-START_SH_VERSION="1.1.1"
+START_SH_VERSION="1.1.2"
 REPO_URL="https://raw.githubusercontent.com/jedarden/bootstrap/main/ex44"
 
 # Handle flags

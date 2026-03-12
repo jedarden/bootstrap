@@ -210,11 +210,23 @@ echo ""
 
 # Fetch SSH keys from repo
 echo "Fetching SSH public keys from repo..."
-SSH_KEY_1=$(curl -sL "$REPO_URL/keys/jedarden.pub")
-SSH_KEY_2=$(curl -sL "$REPO_URL/keys/jeda-mbp.pub")
+
+# Verify network connectivity first
+if ! getent hosts raw.githubusercontent.com &>/dev/null; then
+    echo "ERROR: Cannot resolve raw.githubusercontent.com"
+    echo "DNS may not be working. Try: echo 'nameserver 1.1.1.1' > /etc/resolv.conf"
+    exit 1
+fi
+
+SSH_KEY_1=$(curl -sfL "$REPO_URL/keys/jedarden.pub") || {
+    echo "ERROR: Failed to fetch SSH key (jedarden.pub)"
+    echo "URL: $REPO_URL/keys/jedarden.pub"
+    exit 1
+}
+SSH_KEY_2=$(curl -sfL "$REPO_URL/keys/jeda-mbp.pub") || SSH_KEY_2=""
 
 if [[ -z "$SSH_KEY_1" ]]; then
-    echo "ERROR: Failed to fetch SSH key (jedarden.pub)"
+    echo "ERROR: SSH key (jedarden.pub) is empty"
     exit 1
 fi
 

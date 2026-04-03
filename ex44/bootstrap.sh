@@ -4,14 +4,18 @@ set -euo pipefail
 # Hetzner EX44 Bootstrap Script
 # Hardens a fresh Debian/Ubuntu install and sets up isolated dev workspaces
 #
-# Version: 1.1.2
+# Version: 1.1.4
 #
 # Usage (download and run - interactive prompts require terminal):
-#   curl -sLO https://raw.githubusercontent.com/jedarden/bootstrap/main/ex44/bootstrap-1.1.2.sh
-#   chmod +x bootstrap-1.1.2.sh
-#   ./bootstrap-1.1.2.sh
+#   curl -sLO https://raw.githubusercontent.com/jedarden/bootstrap/main/ex44/bootstrap-1.1.4.sh
+#   chmod +x bootstrap-1.1.4.sh
+#   ./bootstrap-1.1.4.sh
 
-VERSION="1.1.2"
+VERSION="1.1.4"
+
+# Ensure interactive reads work even when piped (curl | bash)
+# Redirect all reads from /dev/tty
+exec 3</dev/tty || { echo "ERROR: No terminal available for interactive input"; exit 1; }
 
 # Handle --version flag
 if [[ "${1:-}" == "--version" ]] || [[ "${1:-}" == "-v" ]]; then
@@ -55,6 +59,7 @@ REBOOT_AFTER_BOOTSTRAP=false
 BACKUP_CONFIGURED=false
 RESTORE_FROM_BACKUP=false
 TAILSCALE_AUTHKEY=""
+CLOUDFLARED_TOKEN=""
 
 # Function to save configuration (non-sensitive values only)
 save_config() {
@@ -103,7 +108,7 @@ if load_config; then
     echo "  B2 Account ID: ${B2_ACCOUNT_ID:-<not configured>}"
     echo "  Reboot after: $REBOOT_AFTER_BOOTSTRAP"
     echo ""
-    read -p "Use previous configuration? [Y/n]: " USE_PREV
+    read -p "Use previous configuration? [Y/n]: " USE_PREV <&3
     if [[ ! "$USE_PREV" =~ ^[Nn]$ ]]; then
         USE_PREVIOUS_CONFIG=true
         echo "Using previous configuration. Will prompt for secrets only."
@@ -116,7 +121,7 @@ if ! $USE_PREVIOUS_CONFIG; then
 
     # Hostname
     CURRENT_HOSTNAME=$(hostname)
-    read -p "Hostname [$CURRENT_HOSTNAME]: " NEW_HOSTNAME
+    read -p "Hostname [$CURRENT_HOSTNAME]: " NEW_HOSTNAME <&3
     NEW_HOSTNAME="${NEW_HOSTNAME:-$CURRENT_HOSTNAME}"
 
     # Users to create
@@ -125,14 +130,14 @@ if ! $USE_PREVIOUS_CONFIG; then
     USERS=()
     while true; do
         if [[ ${#USERS[@]} -eq 0 ]]; then
-            read -p "Username (or Enter for default 'coding'): " USERNAME
+            read -p "Username (or Enter for default 'coding'): " USERNAME <&3
             if [[ -z "$USERNAME" ]]; then
                 USERS=("coding" "trading")
                 echo "Using default users: coding, trading"
                 break
             fi
         else
-            read -p "Username (or Enter to finish): " USERNAME
+            read -p "Username (or Enter to finish): " USERNAME <&3
             if [[ -z "$USERNAME" ]]; then
                 break
             fi
@@ -153,14 +158,14 @@ if ! $USE_PREVIOUS_CONFIG; then
     echo "  Hardware UUID: $HARDWARE_UUID"
     echo "  (Leave Bucket name empty to skip backup setup)"
     echo ""
-    read -p "B2 Bucket name: " B2_BUCKET
-    read -p "B2 Path prefix [hetzner-ex44]: " B2_PATH_PREFIX
+    read -p "B2 Bucket name: " B2_BUCKET <&3
+    read -p "B2 Path prefix [hetzner-ex44]: " B2_PATH_PREFIX <&3
     B2_PATH_PREFIX="${B2_PATH_PREFIX:-hetzner-ex44}"
-    read -p "B2 Account ID (or Key ID): " B2_ACCOUNT_ID
+    read -p "B2 Account ID (or Key ID): " B2_ACCOUNT_ID <&3
 
     # Reboot after completion?
     echo ""
-    read -p "Reboot automatically after bootstrap? [y/N]: " REBOOT_AFTER
+    read -p "Reboot automatically after bootstrap? [y/N]: " REBOOT_AFTER <&3
     REBOOT_AFTER_BOOTSTRAP=false
     [[ "$REBOOT_AFTER" =~ ^[Yy]$ ]] && REBOOT_AFTER_BOOTSTRAP=true
 fi
@@ -176,11 +181,20 @@ if tailscale status &>/dev/null 2>&1; then
     echo "Tailscale already connected, skipping auth key."
     TAILSCALE_AUTHKEY=""
 else
-    read -p "Tailscale auth key (tskey-auth-...): " TAILSCALE_AUTHKEY
+    read -p "Tailscale auth key (tskey-auth-...): " TAILSCALE_AUTHKEY <&3
     if [[ -z "$TAILSCALE_AUTHKEY" ]]; then
         echo "ERROR: Tailscale auth key is required"
         exit 1
     fi
+fi
+
+# Cloudflared tunnel token (optional)
+echo ""
+read -p "Cloudflared tunnel token (leave empty to skip): " CLOUDFLARED_TOKEN <&3
+if [[ -n "$CLOUDFLARED_TOKEN" ]]; then
+    echo "Cloudflared will be installed and configured."
+else
+    echo "Skipping cloudflared installation."
 fi
 
 # B2 secrets
@@ -188,12 +202,12 @@ BACKUP_CONFIGURED=false
 RESTORE_FROM_BACKUP=false
 
 if [[ -n "$B2_BUCKET" && -n "$B2_ACCOUNT_ID" ]]; then
-    read -p "B2 Application Key: " B2_ACCOUNT_KEY
+    read -p "B2 Application Key: " B2_ACCOUNT_KEY <&3
 
     if [[ -n "$B2_ACCOUNT_KEY" ]]; then
-        read -sp "Backup encryption password: " RESTIC_PASSWORD
+        read -sp "Backup encryption password: " RESTIC_PASSWORD <&3
         echo ""
-        read -sp "Confirm encryption password: " RESTIC_PASSWORD_CONFIRM
+        read -sp "Confirm encryption password: " RESTIC_PASSWORD_CONFIRM <&3
         echo ""
 
         if [[ "$RESTIC_PASSWORD" != "$RESTIC_PASSWORD_CONFIRM" ]]; then
@@ -220,7 +234,7 @@ if [[ -n "$B2_BUCKET" && -n "$B2_ACCOUNT_ID" ]]; then
 
         if restic snapshots &>/dev/null 2>&1; then
             echo "Found existing backup!"
-            read -p "Restore from backup after setup? [y/N]: " RESTORE_CONFIRM
+            read -p "Restore from backup after setup? [y/N]: " RESTORE_CONFIRM <&3
             [[ "$RESTORE_CONFIRM" =~ ^[Yy]$ ]] && RESTORE_FROM_BACKUP=true
         else
             echo "No existing backup found. Will create initial backup."
@@ -249,7 +263,7 @@ echo "Fetching SSH public keys from repo..."
 # Verify network connectivity first
 if ! getent hosts raw.githubusercontent.com &>/dev/null; then
     echo "ERROR: Cannot resolve raw.githubusercontent.com"
-    echo "DNS may not be working. Try: echo 'nameserver 1.1.2.1' > /etc/resolv.conf"
+    echo "DNS may not be working. Try: echo 'nameserver 1.1.1.1' > /etc/resolv.conf"
     exit 1
 fi
 
@@ -324,7 +338,7 @@ fi
 # Detect IPv6-only (test actual IPv4 connectivity, not just addresses)
 IPV6_ONLY=false
 echo "Testing network connectivity..."
-if ! ping -4 -c 1 -W 3 1.1.2.1 &>/dev/null; then
+if ! ping -4 -c 1 -W 3 1.1.1.1 &>/dev/null; then
     IPV6_ONLY=true
     echo "No IPv4 connectivity - will use Hetzner DNS64 for NAT64"
 else
@@ -339,9 +353,9 @@ if $IPV6_ONLY; then
     DNS_DISPLAY="Hetzner DNS64 (NAT64)"
 else
     echo "Configuring DNS (Cloudflare)..."
-    DNS_PRIMARY="1.1.2.1"
+    DNS_PRIMARY="1.1.1.1"
     DNS_SECONDARY="1.0.0.1"
-    DNS_DISPLAY="Cloudflare (1.1.2.1)"
+    DNS_DISPLAY="Cloudflare (1.1.1.1)"
 fi
 
 # First, ensure we have working DNS by setting resolv.conf directly
@@ -365,7 +379,7 @@ DNSCONF
     else
         cat > /etc/systemd/resolved.conf.d/dns.conf << 'DNSCONF'
 [Resolve]
-DNS=1.1.2.1 1.0.0.1
+DNS=1.1.1.1 1.0.0.1
 FallbackDNS=8.8.8.8 8.8.4.4
 DNSOverTLS=opportunistic
 DNSCONF
@@ -670,7 +684,7 @@ cat > /etc/ssh/sshd_config.d/hardening.conf << SSHCONF
 # === SSH Hardening Configuration ===
 
 # Authentication
-PermitRootLogin no
+PermitRootLogin prohibit-password
 PasswordAuthentication no
 PermitEmptyPasswords no
 PubkeyAuthentication yes
@@ -679,7 +693,7 @@ ChallengeResponseAuthentication no
 UsePAM yes
 
 # Allowed users (dynamically configured)
-AllowUsers $ALLOW_USERS_LIST
+AllowUsers root $ALLOW_USERS_LIST
 
 # Security limits
 MaxAuthTries 3
@@ -690,7 +704,7 @@ ClientAliveCountMax 2
 
 # Disable unused features
 X11Forwarding no
-AllowTcpForwarding no
+AllowTcpForwarding yes
 AllowAgentForwarding no
 PermitTunnel no
 GatewayPorts no
@@ -818,7 +832,36 @@ echo "Tailscale status:"
 tailscale status
 
 echo ""
-echo "=== Step 11: Installing Claude Code ==="
+echo "=== Step 11: Installing Cloudflared ==="
+
+if [[ -n "$CLOUDFLARED_TOKEN" ]]; then
+    # Install cloudflared if not present (idempotent)
+    if ! command -v cloudflared &>/dev/null; then
+        echo "Installing cloudflared..."
+        ARCH=$(dpkg --print-architecture)
+        curl -fsSL "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${ARCH}.deb" -o /tmp/cloudflared.deb
+        dpkg -i /tmp/cloudflared.deb
+        rm -f /tmp/cloudflared.deb
+    else
+        echo "cloudflared already installed"
+    fi
+
+    # Install cloudflared as a service with the provided token (idempotent)
+    if ! systemctl is-active --quiet cloudflared 2>/dev/null; then
+        echo "Configuring cloudflared tunnel service..."
+        cloudflared service install "$CLOUDFLARED_TOKEN"
+    else
+        echo "cloudflared service already running"
+    fi
+
+    echo "cloudflared status:"
+    systemctl status cloudflared --no-pager || true
+else
+    echo "Skipping cloudflared (no token provided)."
+fi
+
+echo ""
+echo "=== Step 12: Installing Claude Code ==="
 
 # Helper to check if claude is installed for a user
 claude_installed() {
@@ -857,7 +900,7 @@ for user in "${USERS[@]}"; do
 done
 
 echo ""
-echo "=== Step 12: Setting Up start.sh for Users ==="
+echo "=== Step 13: Setting Up start.sh for Users ==="
 # Create start.sh for each user with tmux + Claude Code setup
 for user in "${USERS[@]}"; do
     echo "Setting up start.sh for user: $user"
@@ -865,7 +908,7 @@ for user in "${USERS[@]}"; do
 #!/bin/bash
 
 # start.sh - Tmux + Claude Code launcher with self-update
-START_SH_VERSION="1.1.2"
+START_SH_VERSION="1.1.4"
 REPO_URL="https://raw.githubusercontent.com/jedarden/bootstrap/main/ex44"
 
 # Handle flags
@@ -1099,7 +1142,7 @@ STARTSH
 done
 
 echo ""
-echo "=== Step 13: Installing Rootless Docker ==="
+echo "=== Step 14: Installing Rootless Docker ==="
 
 # Install dependencies for rootless Docker (idempotent)
 apt-get install -y \
@@ -1182,7 +1225,7 @@ done
 echo "Rootless Docker installed. Each user has isolated Docker storage in ~/.local/share/docker/"
 
 echo ""
-echo "=== Step 14: Security Services ==="
+echo "=== Step 15: Security Services ==="
 
 # Configure fail2ban
 cat > /etc/fail2ban/jail.local << 'FAIL2BAN'
@@ -1261,7 +1304,7 @@ APT::Periodic::AutocleanInterval "7";
 AUTOUPGRADE
 
 echo ""
-echo "=== Step 15: Backup Configuration (restic + B2) ==="
+echo "=== Step 16: Backup Configuration (restic + B2) ==="
 
 # Install restic
 apt-get install -y restic
@@ -1514,7 +1557,7 @@ echo "  - Weekly prune on Sundays at 4 AM"
 echo "  - Commands: backup-home, restore-home, list-backups"
 
 echo ""
-echo "=== Step 16: Final Hardening ==="
+echo "=== Step 17: Final Hardening ==="
 
 # Secure shared memory
 if ! grep -q "tmpfs /run/shm" /etc/fstab; then
@@ -1588,6 +1631,9 @@ echo "Installed software:"
 echo "  - Claude Code (native installer)"
 echo "  - Rootless Docker (per-user isolation)"
 echo "  - kubectl (Kubernetes CLI)"
+if [[ -n "$CLOUDFLARED_TOKEN" ]]; then
+echo "  - cloudflared (Cloudflare Tunnel)"
+fi
 echo "  - tmux (with mouse support, 10k scrollback)"
 echo "  - Modern CLI tools: ripgrep, fd, fzf, bat, exa, httpie"
 echo ""

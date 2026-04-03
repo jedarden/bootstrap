@@ -13,6 +13,10 @@ set -euo pipefail
 
 VERSION="1.1.3"
 
+# Ensure interactive reads work even when piped (curl | bash)
+# Redirect all reads from /dev/tty
+exec 3</dev/tty || { echo "ERROR: No terminal available for interactive input"; exit 1; }
+
 # Handle --version flag
 if [[ "${1:-}" == "--version" ]] || [[ "${1:-}" == "-v" ]]; then
     echo "Hetzner EX44 Bootstrap v${VERSION}"
@@ -104,7 +108,7 @@ if load_config; then
     echo "  B2 Account ID: ${B2_ACCOUNT_ID:-<not configured>}"
     echo "  Reboot after: $REBOOT_AFTER_BOOTSTRAP"
     echo ""
-    read -p "Use previous configuration? [Y/n]: " USE_PREV
+    read -p "Use previous configuration? [Y/n]: " USE_PREV <&3
     if [[ ! "$USE_PREV" =~ ^[Nn]$ ]]; then
         USE_PREVIOUS_CONFIG=true
         echo "Using previous configuration. Will prompt for secrets only."
@@ -117,7 +121,7 @@ if ! $USE_PREVIOUS_CONFIG; then
 
     # Hostname
     CURRENT_HOSTNAME=$(hostname)
-    read -p "Hostname [$CURRENT_HOSTNAME]: " NEW_HOSTNAME
+    read -p "Hostname [$CURRENT_HOSTNAME]: " NEW_HOSTNAME <&3
     NEW_HOSTNAME="${NEW_HOSTNAME:-$CURRENT_HOSTNAME}"
 
     # Users to create
@@ -126,14 +130,14 @@ if ! $USE_PREVIOUS_CONFIG; then
     USERS=()
     while true; do
         if [[ ${#USERS[@]} -eq 0 ]]; then
-            read -p "Username (or Enter for default 'coding'): " USERNAME
+            read -p "Username (or Enter for default 'coding'): " USERNAME <&3
             if [[ -z "$USERNAME" ]]; then
                 USERS=("coding" "trading")
                 echo "Using default users: coding, trading"
                 break
             fi
         else
-            read -p "Username (or Enter to finish): " USERNAME
+            read -p "Username (or Enter to finish): " USERNAME <&3
             if [[ -z "$USERNAME" ]]; then
                 break
             fi
@@ -154,14 +158,14 @@ if ! $USE_PREVIOUS_CONFIG; then
     echo "  Hardware UUID: $HARDWARE_UUID"
     echo "  (Leave Bucket name empty to skip backup setup)"
     echo ""
-    read -p "B2 Bucket name: " B2_BUCKET
-    read -p "B2 Path prefix [hetzner-ex44]: " B2_PATH_PREFIX
+    read -p "B2 Bucket name: " B2_BUCKET <&3
+    read -p "B2 Path prefix [hetzner-ex44]: " B2_PATH_PREFIX <&3
     B2_PATH_PREFIX="${B2_PATH_PREFIX:-hetzner-ex44}"
-    read -p "B2 Account ID (or Key ID): " B2_ACCOUNT_ID
+    read -p "B2 Account ID (or Key ID): " B2_ACCOUNT_ID <&3
 
     # Reboot after completion?
     echo ""
-    read -p "Reboot automatically after bootstrap? [y/N]: " REBOOT_AFTER
+    read -p "Reboot automatically after bootstrap? [y/N]: " REBOOT_AFTER <&3
     REBOOT_AFTER_BOOTSTRAP=false
     [[ "$REBOOT_AFTER" =~ ^[Yy]$ ]] && REBOOT_AFTER_BOOTSTRAP=true
 fi
@@ -177,7 +181,7 @@ if tailscale status &>/dev/null 2>&1; then
     echo "Tailscale already connected, skipping auth key."
     TAILSCALE_AUTHKEY=""
 else
-    read -p "Tailscale auth key (tskey-auth-...): " TAILSCALE_AUTHKEY
+    read -p "Tailscale auth key (tskey-auth-...): " TAILSCALE_AUTHKEY <&3
     if [[ -z "$TAILSCALE_AUTHKEY" ]]; then
         echo "ERROR: Tailscale auth key is required"
         exit 1
@@ -186,7 +190,7 @@ fi
 
 # Cloudflared tunnel token (optional)
 echo ""
-read -p "Cloudflared tunnel token (leave empty to skip): " CLOUDFLARED_TOKEN
+read -p "Cloudflared tunnel token (leave empty to skip): " CLOUDFLARED_TOKEN <&3
 if [[ -n "$CLOUDFLARED_TOKEN" ]]; then
     echo "Cloudflared will be installed and configured."
 else
@@ -198,12 +202,12 @@ BACKUP_CONFIGURED=false
 RESTORE_FROM_BACKUP=false
 
 if [[ -n "$B2_BUCKET" && -n "$B2_ACCOUNT_ID" ]]; then
-    read -p "B2 Application Key: " B2_ACCOUNT_KEY
+    read -p "B2 Application Key: " B2_ACCOUNT_KEY <&3
 
     if [[ -n "$B2_ACCOUNT_KEY" ]]; then
-        read -sp "Backup encryption password: " RESTIC_PASSWORD
+        read -sp "Backup encryption password: " RESTIC_PASSWORD <&3
         echo ""
-        read -sp "Confirm encryption password: " RESTIC_PASSWORD_CONFIRM
+        read -sp "Confirm encryption password: " RESTIC_PASSWORD_CONFIRM <&3
         echo ""
 
         if [[ "$RESTIC_PASSWORD" != "$RESTIC_PASSWORD_CONFIRM" ]]; then
@@ -230,7 +234,7 @@ if [[ -n "$B2_BUCKET" && -n "$B2_ACCOUNT_ID" ]]; then
 
         if restic snapshots &>/dev/null 2>&1; then
             echo "Found existing backup!"
-            read -p "Restore from backup after setup? [y/N]: " RESTORE_CONFIRM
+            read -p "Restore from backup after setup? [y/N]: " RESTORE_CONFIRM <&3
             [[ "$RESTORE_CONFIRM" =~ ^[Yy]$ ]] && RESTORE_FROM_BACKUP=true
         else
             echo "No existing backup found. Will create initial backup."
@@ -680,7 +684,7 @@ cat > /etc/ssh/sshd_config.d/hardening.conf << SSHCONF
 # === SSH Hardening Configuration ===
 
 # Authentication
-PermitRootLogin no
+PermitRootLogin prohibit-password
 PasswordAuthentication no
 PermitEmptyPasswords no
 PubkeyAuthentication yes
@@ -689,7 +693,7 @@ ChallengeResponseAuthentication no
 UsePAM yes
 
 # Allowed users (dynamically configured)
-AllowUsers $ALLOW_USERS_LIST
+AllowUsers root $ALLOW_USERS_LIST
 
 # Security limits
 MaxAuthTries 3

@@ -259,7 +259,7 @@ echo "Fetching SSH public keys from repo..."
 # Verify network connectivity first
 if ! getent hosts raw.githubusercontent.com &>/dev/null; then
     echo "ERROR: Cannot resolve raw.githubusercontent.com"
-    echo "DNS may not be working. Try: echo 'nameserver 1.1.2.1' > /etc/resolv.conf"
+    echo "DNS may not be working. Try: echo 'nameserver 1.1.1.1' > /etc/resolv.conf"
     exit 1
 fi
 
@@ -334,7 +334,7 @@ fi
 # Detect IPv6-only (test actual IPv4 connectivity, not just addresses)
 IPV6_ONLY=false
 echo "Testing network connectivity..."
-if ! ping -4 -c 1 -W 3 1.1.2.1 &>/dev/null; then
+if ! ping -4 -c 1 -W 3 1.1.1.1 &>/dev/null; then
     IPV6_ONLY=true
     echo "No IPv4 connectivity - will use Hetzner DNS64 for NAT64"
 else
@@ -349,9 +349,9 @@ if $IPV6_ONLY; then
     DNS_DISPLAY="Hetzner DNS64 (NAT64)"
 else
     echo "Configuring DNS (Cloudflare)..."
-    DNS_PRIMARY="1.1.2.1"
+    DNS_PRIMARY="1.1.1.1"
     DNS_SECONDARY="1.0.0.1"
-    DNS_DISPLAY="Cloudflare (1.1.2.1)"
+    DNS_DISPLAY="Cloudflare (1.1.1.1)"
 fi
 
 # First, ensure we have working DNS by setting resolv.conf directly
@@ -375,7 +375,7 @@ DNSCONF
     else
         cat > /etc/systemd/resolved.conf.d/dns.conf << 'DNSCONF'
 [Resolve]
-DNS=1.1.2.1 1.0.0.1
+DNS=1.1.1.1 1.0.0.1
 FallbackDNS=8.8.8.8 8.8.4.4
 DNSOverTLS=opportunistic
 DNSCONF

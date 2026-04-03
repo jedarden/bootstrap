@@ -700,7 +700,7 @@ ClientAliveCountMax 2
 
 # Disable unused features
 X11Forwarding no
-AllowTcpForwarding no
+AllowTcpForwarding yes
 AllowAgentForwarding no
 PermitTunnel no
 GatewayPorts no

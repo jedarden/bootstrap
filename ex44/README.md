@@ -114,11 +114,25 @@ ssh trading@<hostname>.tailnet
 
 ```
 ex44/
-├── bootstrap.sh         # Main bootstrap script
+├── bootstrap.sh         # Main bootstrap script (embeds start.sh, see below)
+├── start.sh             # Canonical tmux + Claude Code launcher (self-updating)
+├── start.sh.version     # Version string self-update compares against
+├── sync-start-sh.sh     # Regenerates bootstrap.sh's embedded copy from start.sh
 ├── keys/
 │   └── jedarden.pub     # SSH public key
 └── README.md            # This file
 ```
+
+**start.sh is single-sourced.** `bootstrap.sh` embeds a byte-for-byte copy of
+`start.sh` in a heredoc to drop onto each new user's home directory; every
+already-bootstrapped host's `start.sh` self-updates from the standalone
+`start.sh` file afterward. After editing `start.sh`, run
+`./sync-start-sh.sh` to regenerate the embedded copy and bump both
+`START_SH_VERSION` (inside `start.sh`) and `start.sh.version` — never hand-edit
+the embedded copy in `bootstrap.sh` directly, and never hand-patch a deployed
+`~/start.sh` on a host (land the change here first). See
+`../docs/plan/plan.md` ADR-1 for why this matters — both failure modes it
+guards against already happened once.
 
 ## Recovery
 

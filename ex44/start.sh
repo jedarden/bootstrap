@@ -1,10 +1,17 @@
-for user in "${USERS[@]}"; do
-    echo "Setting up start.sh for user: $user"
-    cat > "/home/$user/start.sh" << 'STARTSH'
 #!/bin/bash
 
 # start.sh - Tmux + Claude Code launcher with self-update
-START_SH_VERSION="1.1.2"
+#
+# This file is the single canonical copy. bootstrap.sh embeds a byte-for-byte
+# copy of it in a heredoc (Step 13) so freshly-bootstrapped hosts get it on
+# first run; every host's copy self-updates from this file afterward (see
+# check_for_self_update below). Never hand-edit a deployed ~/start.sh on a
+# host and never edit only one of the two copies in this repo - run
+# ex44/sync-start-sh.sh after any change here to regenerate bootstrap.sh's
+# embedded copy, then commit both together. See docs/plan/plan.md ADR-1 for
+# why (a hand-patched host copy and a corrupted embedded copy both went
+# undetected in the wild before this rule existed).
+START_SH_VERSION="1.1.3"
 REPO_URL="https://raw.githubusercontent.com/jedarden/bootstrap/main/ex44"
 
 # Handle flags
@@ -43,11 +50,16 @@ check_for_self_update() {
             echo "Updating start.sh: $START_SH_VERSION -> $remote_version"
             local new_script
             new_script=$(curl -sfL "$REPO_URL/start.sh" 2>/dev/null)
-            if [[ -n "$new_script" ]]; then
+            # Guard against installing a broken or empty payload (e.g. a
+            # login page, truncated fetch, or corrupted commit) - verify it
+            # parses as valid bash before overwriting the working script.
+            if [[ -n "$new_script" ]] && bash -n <(printf '%s' "$new_script") 2>/dev/null; then
                 echo "$new_script" > "$SCRIPT_DIR/start.sh"
                 chmod +x "$SCRIPT_DIR/start.sh"
                 echo "Updated! Restarting..."
                 exec "$SCRIPT_DIR/start.sh" --no-update "$@"
+            elif [[ -n "$new_script" ]]; then
+                echo "Warning: fetched start.sh failed syntax check, keeping current version $START_SH_VERSION"
             fi
         fi
     fi
@@ -184,8 +196,10 @@ set -g default-terminal "screen-256color"
 # Faster escape
 set -sg escape-time 10
 
-# History
-set -g history-limit 10000
+# History (kept modest deliberately - see the OOM-protection note below;
+# large scrollback across many sessions was a contributing factor in the
+# 2026-05-25 tmux-server OOM incident)
+set -g history-limit 2000
 
 # Split panes with | and -
 bind | split-window -h -c "#{pane_current_path}"
@@ -226,7 +240,21 @@ fi
 # Create the tmux session with our config and start claude code
 echo "Creating tmux session: $SESSION_NAME"
 tmux -f "$TMUX_CONF" new-session -d -s "$SESSION_NAME" -c "$SCRIPT_DIR"
-tmux send-keys -t "$SESSION_NAME" "unset CLAUDECODE && exec claude --dangerously-skip-permissions" Enter
+
+# Protect the tmux server from the OOM killer: on memory exhaustion the kernel
+# should kill a claude worker pane, not the server (killing the server takes
+# down every session at once). See the 2026-05-25 OOM incident. Needs
+# passwordless sudo for choom.
+SERVER_PID=$(tmux -f "$TMUX_CONF" display-message -t "$SESSION_NAME" -p '#{pid}' 2>/dev/null)
+if [[ -n "$SERVER_PID" ]]; then
+    if sudo -n choom -n -1000 -p "$SERVER_PID" >/dev/null 2>&1; then
+        echo "Protected tmux server $SERVER_PID from OOM killer (oom_score_adj=-1000)"
+    else
+        echo "Warning: could not set OOM protection on tmux server $SERVER_PID (needs passwordless sudo + choom)"
+    fi
+fi
+
+tmux send-keys -t "$SESSION_NAME" "unset CLAUDECODE && exec claude --dangerously-skip-permissions --model sonnet" Enter
 
 # Attach to the session
 echo "Attaching to session: $SESSION_NAME"

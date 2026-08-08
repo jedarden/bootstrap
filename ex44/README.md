@@ -115,7 +115,7 @@ ssh trading@<hostname>.tailnet
 ```
 ex44/
 ├── bootstrap.sh         # Main bootstrap script (embeds start.sh, see below)
-├── start.sh             # Canonical tmux + Claude Code launcher (self-updating)
+├── start.sh             # Canonical tmux + coding-agent launcher (self-updating)
 ├── start.sh.version     # Version string self-update compares against
 ├── sync-start-sh.sh     # Regenerates bootstrap.sh's embedded copy from start.sh
 ├── keys/
@@ -133,6 +133,21 @@ the embedded copy in `bootstrap.sh` directly, and never hand-patch a deployed
 `~/start.sh` on a host (land the change here first). See
 `../docs/plan/plan.md` ADR-1 for why this matters — both failure modes it
 guards against already happened once.
+
+**start.sh launches claude or codex.** Selection order is `--agent
+claude|codex` > `$START_SH_AGENT` > interactive prompt > `claude`. The prompt
+only appears when stdin is a TTY, so non-interactive invocations take the
+`claude` default instead of blocking. When start.sh detects it is already
+running inside a herdr pane (`HERDR_ENV=1`) it skips tmux entirely and execs
+the agent in the current pane — herdr is already the multiplexer, and nesting
+tmux there would consume a phonetic session name and interfere with herdr's
+screen-manifest agent-status detection. See `../docs/plan/plan.md` ADR-2.
+
+```bash
+./start.sh                    # prompt (or claude if no TTY)
+./start.sh --agent codex      # explicit
+START_SH_AGENT=codex ./start.sh
+```
 
 ## Recovery
 

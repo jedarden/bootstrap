@@ -169,3 +169,96 @@ reintroduce the login-page bug.
   `--check` mode and fails the build if `bootstrap.sh`'s embedded copy and
   `ex44/start.sh` disagree, closing the last gap (someone still forgetting to
   run the script).
+
+## ADR-2: 2026-08-07 — start.sh selects a coding agent (claude|codex) and defers to herdr
+
+### Context
+
+`start.sh` hard-coded a single launch path: create a phonetic-alphabet tmux
+session, then `send-keys` a fixed
+`unset CLAUDECODE && exec claude --dangerously-skip-permissions --model sonnet`.
+Two things have changed underneath that assumption.
+
+First, Claude Code is no longer the only interactive agent in use on these
+hosts — the Codex CLI (`@openai/codex`, an npm global) is installed on `ex44`
+and there was no way to launch it through the standard launcher.
+
+Second, herdr (`herdr.dev`, a terminal multiplexer purpose-built for running
+several agent CLIs side by side) now runs on `ex44` and rides on the *same*
+ambient tmux server as the phonetic sessions. Running `start.sh` from inside a
+herdr pane therefore nested a tmux session inside a pane that was already a
+multiplexed view: it consumed a phonetic name for a session nobody would
+attach to by name, and the extra tmux status chrome interferes with herdr's
+screen-manifest agent-status detection (herdr pattern-matches an agent's
+bottom-buffer to infer idle/working/blocked; Claude Code and Codex are both on
+that fallback tier rather than hook-reported state, so the buffer's contents
+matter).
+
+A prior memory note asserted `start.sh` already handled the herdr case. It did
+not — neither the repo copy, the deployed `~/start.sh`, nor the published
+`raw.githubusercontent.com` copy contained the string `herdr` at any point
+before this ADR. The belief was wrong, not the implementation.
+
+### Decision
+
+`start.sh` v1.2.0 selects an agent and picks a launch strategy.
+
+**Agent selection**, in precedence order: `--agent claude|codex` >
+`$START_SH_AGENT` > interactive prompt > `claude`. The prompt is gated on
+`[[ -t 0 ]]`; with no TTY the launcher announces the fallback and takes
+`claude`. An invalid value from either the flag or the environment variable is
+a hard error rather than a silent coercion to the default.
+
+The TTY gate is the load-bearing part: `start.sh` is a login-time launcher and
+is also embedded verbatim into `bootstrap.sh`, so an unconditional `read`
+would be a latent hang in any non-interactive invocation. Selection happens
+before the installer step so that choosing `codex` never triggers a Claude
+Code install (and vice versa).
+
+**Launch strategy** branches on `HERDR_ENV`, which herdr injects into every
+pane it spawns. Inside a herdr pane, `start.sh` skips tmux, TPM, and the
+`choom` OOM-protection step entirely and `exec`s the agent in the current
+pane. Outside herdr, behavior is unchanged from v1.1.3 except that the
+`send-keys` command string is now built from the selected agent's argv.
+
+Codex gets an install/update path mirroring Claude Code's, but through npm
+(`npm view @openai/codex version` to check, `npm install -g @openai/codex@latest`
+to install). Unlike the Claude path, a *failed upgrade* when a working copy is
+already present is a warning rather than a fatal error.
+
+### Alternatives Considered
+
+- **Prompt only inside herdr, leave the tmux path claude-only.** Smaller
+  change and matches how the need surfaced, but leaves two different launcher
+  behaviors depending on where you happen to be sitting. Rejected in favor of
+  one consistent selection model.
+- **Interactive prompt with no flag or environment override.** Simpler, but
+  unscriptable and reintroduces the non-interactive hang risk that the TTY
+  gate exists to prevent.
+- **Detect herdr via `HERDR_SOCKET_PATH` or by walking `/proc` for a herdr
+  server.** `HERDR_ENV=1` is the documented, cheapest, and most direct signal;
+  the others are proxies for it.
+- **`codex update` for the upgrade path.** It exists as a subcommand, but its
+  interactivity is unverified and an updater that can prompt is exactly the
+  kind of thing that hangs a launcher. npm is already how Codex is installed
+  on these hosts.
+
+### Consequences
+
+- Hosts pick this up through the normal self-update path (v1.1.3 → v1.2.0) the
+  next time `start.sh` runs. No re-bootstrap needed.
+- The self-update re-exec now replays the user's original argv
+  (`ORIGINAL_ARGS`) instead of the previous `"$@"`-inside-a-function, which
+  silently dropped flags. `--agent codex` survives an update-and-restart.
+- Argument parsing moved from two `$1` string comparisons to a real `while`
+  loop, so flags now work in any order and an unknown flag is a usage error
+  rather than being ignored. Anything that previously passed junk arguments
+  and got away with it will now fail loudly.
+- Both agents still launch with approval prompts disabled
+  (`--dangerously-skip-permissions` / `--dangerously-bypass-approvals-and-sandbox`).
+  That matches the launcher's long-standing behavior and these hosts' posture
+  (dedicated, single-tenant, reachable only over Tailscale); it is not a new
+  exposure, but it is now a decision made twice rather than once.
+- Codex support adds an npm dependency to one branch of the launcher. On a
+  host without npm, choosing `codex` fails with an actionable message; the
+  `claude` branch is unaffected.

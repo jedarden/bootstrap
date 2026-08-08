@@ -262,3 +262,64 @@ already present is a warning rather than a fatal error.
 - Codex support adds an npm dependency to one branch of the launcher. On a
   host without npm, choosing `codex` fails with an actionable message; the
   `claude` branch is unaffected.
+
+## ADR-3: 2026-08-08 — Generalize the nesting guard from herdr to any multiplexer
+
+### Context
+
+ADR-2 added a `HERDR_ENV` branch so `start.sh` would not create a tmux session
+inside a herdr pane. Reviewing that change surfaced the same bug one level
+down, and it predates ADR-2 entirely: `start.sh` has never checked `$TMUX`.
+
+Run from inside an existing tmux client, the launcher would run the whole tmux
+path to completion — allocate a phonetic name, create the session, `choom` it,
+`send-keys` the agent — and only fail at the very last step, `attach-session`,
+which tmux refuses from inside another client. The failure is maximally
+unhelpful: it happens after all the side effects, so it leaves a detached
+session running a live agent that nobody is attached to, holding a phonetic
+name. Nothing cleans that up, and the next `start.sh` run picks the next
+letter, so the leak accumulates silently.
+
+### Decision
+
+Guard on `$TMUX` with the same strategy as the herdr branch: announce the
+reason, then `exec` the selected agent in the current pane.
+
+The `$TMUX` check is placed **after** the `HERDR_ENV` check, not before.
+herdr rides on the same ambient tmux server as the phonetic sessions, so a
+herdr pane has both variables set; ordering herdr first means such a pane
+reports the more specific reason ("Detected herdr pane w3:p7") rather than the
+generic tmux one. Both branches take identical action, so the ordering only
+affects the message — but the message is the whole diagnostic value.
+
+The current session name is read via `tmux display-message -p '#S'` purely for
+the log line, and degrades to "unknown" if that fails.
+
+### Alternatives Considered
+
+- **Create the session detached and `switch-client` to it.** This is the other
+  correct way to handle tmux-inside-tmux, and it preserves the phonetic-session
+  model that the NATO fleet convention depends on. Rejected for now because it
+  is a different feature (a second launch mode) rather than a guard, and
+  because the behavior it would preserve is one nobody currently has — the path
+  has always been broken. Worth revisiting if spawning a new named session from
+  inside tmux turns out to be a real workflow.
+- **Hard error and exit non-zero.** Safe and obvious, but strictly worse than
+  doing the useful thing: the user asked for an agent, and there is an
+  unambiguous correct place to put one.
+- **`unset TMUX` and force the nested attach.** Actually nests a client inside
+  a client. This is the thing the guard exists to prevent.
+
+### Consequences
+
+- Running `start.sh` inside tmux now launches the agent in the current pane
+  instead of leaking a detached session. The detached-session leak is fixed at
+  the source; any sessions already leaked by earlier versions are still around
+  and need manual cleanup (they are ordinary tmux sessions holding phonetic
+  names).
+- The tmux path proper is now reached only from a bare shell. In particular
+  the "source the updated config into a running tmux server" step no longer
+  runs when invoked from inside tmux — acceptable, since that invocation no
+  longer creates a session, and `prefix + r` still reloads config by hand.
+- All three launch contexts (herdr pane, tmux client, bare shell) are now
+  explicit and tested, rather than two explicit ones and an unhandled case.

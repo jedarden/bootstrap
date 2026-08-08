@@ -2,12 +2,11 @@
 
 # start.sh - Tmux + coding-agent launcher with self-update
 #
-# Launches an interactive coding agent - claude or codex. Outside herdr it
+# Launches an interactive coding agent - claude or codex. On a bare shell it
 # creates a phonetic-alphabet tmux session and starts the agent inside it.
-# Inside a herdr pane (herdr injects HERDR_ENV=1 into every pane it spawns) it
-# skips tmux entirely and execs the agent in the current pane: herdr already
-# provides the pane/tab layer, and a nested tmux session would burn a phonetic
-# name and interfere with herdr's screen-manifest agent-status detection.
+# When something is already multiplexing - a herdr pane (HERDR_ENV, injected
+# into every pane herdr spawns) or an existing tmux client ($TMUX) - it skips
+# tmux entirely and execs the agent in the current pane instead of nesting.
 #
 # This file is the single canonical copy. bootstrap.sh embeds a byte-for-byte
 # copy of it in a heredoc (Step 13) so freshly-bootstrapped hosts get it on
@@ -18,7 +17,7 @@
 # embedded copy, then commit both together. See docs/plan/plan.md ADR-1 for
 # why (a hand-patched host copy and a corrupted embedded copy both went
 # undetected in the wild before this rule existed).
-START_SH_VERSION="1.2.0"
+START_SH_VERSION="1.2.1"
 REPO_URL="https://raw.githubusercontent.com/jedarden/bootstrap/main/ex44"
 
 usage() {
@@ -383,6 +382,23 @@ set_agent_argv
 # carries its own OOM protection, so the choom step below is not needed here.
 if [[ -n "${HERDR_ENV:-}" ]]; then
     echo "Detected herdr pane ${HERDR_PANE_ID:-unknown} - skipping nested tmux session."
+    echo "Launching $AGENT in the current pane..."
+    unset CLAUDECODE
+    exec "${AGENT_ARGV[@]}"
+fi
+
+# Same reasoning one level down: tmux sets $TMUX in every process it spawns,
+# so a non-empty value means we are already inside a tmux client. Creating a
+# session here would nest a client inside a client, which tmux refuses to
+# attach - the pre-v1.2.1 code created the session and launched the agent
+# anyway, then failed at attach-session, leaving a detached session running an
+# agent nobody was attached to (and consuming a phonetic name for it). Exec in
+# the current pane instead. This is checked after the herdr branch above
+# because herdr rides on the same ambient tmux server, so a herdr pane has
+# both variables set and should report the more specific reason.
+if [[ -n "${TMUX:-}" ]]; then
+    CURRENT_SESSION=$(tmux display-message -p '#S' 2>/dev/null)
+    echo "Already inside tmux (session: ${CURRENT_SESSION:-unknown}) - not nesting a new session."
     echo "Launching $AGENT in the current pane..."
     unset CLAUDECODE
     exec "${AGENT_ARGV[@]}"

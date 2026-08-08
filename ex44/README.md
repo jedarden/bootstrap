@@ -137,11 +137,15 @@ guards against already happened once.
 **start.sh launches claude or codex.** Selection order is `--agent
 claude|codex` > `$START_SH_AGENT` > interactive prompt > `claude`. The prompt
 only appears when stdin is a TTY, so non-interactive invocations take the
-`claude` default instead of blocking. When start.sh detects it is already
-running inside a herdr pane (`HERDR_ENV=1`) it skips tmux entirely and execs
-the agent in the current pane — herdr is already the multiplexer, and nesting
-tmux there would consume a phonetic session name and interfere with herdr's
-screen-manifest agent-status detection. See `../docs/plan/plan.md` ADR-2.
+`claude` default instead of blocking.
+
+When start.sh detects that something is **already multiplexing** — a herdr
+pane (`HERDR_ENV`) or an existing tmux client (`$TMUX`) — it skips tmux
+entirely and execs the agent in the current pane rather than nesting. herdr is
+checked first, since herdr rides on the same ambient tmux server and a herdr
+pane has both variables set. On a bare shell the original behavior is
+unchanged: a new phonetic-alphabet tmux session, then attach. See
+`../docs/plan/plan.md` ADR-2 and ADR-3.
 
 ```bash
 ./start.sh                    # prompt (or claude if no TTY)

@@ -13,6 +13,11 @@ set -euo pipefail
 
 VERSION="1.1.5"
 
+# External tool versions (pinned for reproducibility - update deliberately)
+YQ_VERSION="v4.44.1"
+KUBECTL_VERSION="v1.29.6"
+CLOUDFLARED_VERSION="2024.8.1"
+
 # Ensure interactive reads work even when piped (curl | bash)
 # Redirect all reads from /dev/tty
 exec 3</dev/tty || { echo "ERROR: No terminal available for interactive input"; exit 1; }
@@ -476,9 +481,9 @@ install_packages \
 
 # yq - not in standard repos, install via binary
 if ! command -v yq &>/dev/null; then
-    echo "Installing yq from GitHub releases..."
-    YQ_VERSION=$(curl -sL "https://api.github.com/repos/mikefarah/yq/releases/latest" | jq -r '.tag_name') || YQ_VERSION="v4.40.5"
-    curl -sL "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_$(dpkg --print-architecture)" -o /usr/local/bin/yq && chmod +x /usr/local/bin/yq || echo "Warning: Failed to install yq"
+    echo "Installing yq ${YQ_VERSION} from GitHub releases..."
+    ARCH=$(dpkg --print-architecture)
+    curl -sL "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_${ARCH}" -o /usr/local/bin/yq && chmod +x /usr/local/bin/yq || echo "Warning: Failed to install yq"
 fi
 
 # Network tools
@@ -544,9 +549,8 @@ echo "=== Step 5: Installing kubectl ==="
 if command -v kubectl &>/dev/null; then
     echo "kubectl already installed: $(kubectl version --client --short 2>/dev/null || kubectl version --client)"
 else
-    KUBECTL_VERSION=$(curl -L -s https://dl.k8s.io/release/stable.txt)
     ARCH=$(dpkg --print-architecture)
-    echo "Installing kubectl $KUBECTL_VERSION for $ARCH..."
+    echo "Installing kubectl ${KUBECTL_VERSION} for $ARCH..."
 
     curl -LO "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${ARCH}/kubectl"
     curl -LO "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${ARCH}/kubectl.sha256"
@@ -837,9 +841,9 @@ echo "=== Step 11: Installing Cloudflared ==="
 if [[ -n "$CLOUDFLARED_TOKEN" ]]; then
     # Install cloudflared if not present (idempotent)
     if ! command -v cloudflared &>/dev/null; then
-        echo "Installing cloudflared..."
+        echo "Installing cloudflared ${CLOUDFLARED_VERSION}..."
         ARCH=$(dpkg --print-architecture)
-        curl -fsSL "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${ARCH}.deb" -o /tmp/cloudflared.deb
+        curl -fsSL "https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}/cloudflared-linux-${ARCH}.deb" -o /tmp/cloudflared.deb
         dpkg -i /tmp/cloudflared.deb
         rm -f /tmp/cloudflared.deb
     else

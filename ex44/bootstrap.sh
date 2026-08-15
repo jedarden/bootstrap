@@ -202,98 +202,22 @@ else
     echo "Skipping cloudflared installation."
 fi
 
-# Function to fetch secrets from OpenBao (optional)
-# Returns 0 if secrets were found and populated, 1 otherwise
-#
-# Expected OpenBao secret structure at secret/bootstrap/<hardware-uuid>/b2:
-# {
-#   "data": {
-#     "data": {
-#       "b2_application_key": "...",
-#       "restic_password": "..."
-#     }
-#   }
-# }
-fetch_secrets_from_openbao() {
-    local openbao_addr="https://traefil-rs-manager:8200"
-    local secret_path="secret/bootstrap/${HARDWARE_UUID}/b2"
-
-    # Only try if Tailscale is running (OpenBao is accessed over tailnet)
-    if ! systemctl is-active --quiet tailscale; then
-        return 1
-    fi
-
-    echo "Checking OpenBao for pre-provisioned secrets at $openbao_addr..."
-
-    # Try to fetch the secret with a short timeout
-    if ! timeout 5 curl -fsk -X GET \
-        "${openbao_addr}/v1/${secret_path}" \
-        -H "X-Vault-Token: ${OPENBAO_TOKEN:-}" \
-        &>/dev/null; then
-        echo "No OpenBao token provided or OpenBao unreachable."
-        return 1
-    fi
-
-    # Fetch and parse the secret response
-    local secret_response
-    secret_response=$(curl -fsk -X GET \
-        "${openbao_addr}/v1/${secret_path}" \
-        -H "X-Vault-Token: ${OPENBAO_TOKEN}" 2>/dev/null) || return 1
-
-    # Check if the secret exists
-    if ! echo "$secret_response" | jq -e '.data.data' &>/dev/null; then
-        echo "No secrets found at OpenBao path: ${secret_path}"
-        return 1
-    fi
-
-    # Extract values using jq
-    local b2_key restic_pass
-    b2_key=$(echo "$secret_response" | jq -r '.data.data.b2_application_key // empty')
-    restic_pass=$(echo "$secret_response" | jq -r '.data.data.restic_password // empty')
-
-    if [[ -z "$b2_key" || -z "$restic_pass" ]]; then
-        echo "OpenBao secret exists but missing required fields (b2_application_key, restic_password)"
-        return 1
-    fi
-
-    # Populate the variables
-    B2_ACCOUNT_KEY="$b2_key"
-    RESTIC_PASSWORD="$restic_pass"
-    RESTIC_PASSWORD_CONFIRM="$restic_pass"
-
-    echo "Secrets retrieved from OpenBao."
-    return 0
-}
-
 # B2 secrets
 BACKUP_CONFIGURED=false
 RESTORE_FROM_BACKUP=false
 
 if [[ -n "$B2_BUCKET" && -n "$B2_ACCOUNT_ID" ]]; then
-    # Try OpenBao first if OPENBAO_TOKEN is set
-    OPENBAO_SECS_FETCHED=false
-    if [[ -n "${OPENBAO_TOKEN:-}" ]]; then
-        if fetch_secrets_from_openbao; then
-            OPENBAO_SECS_FETCHED=true
-        fi
-    fi
-
-    # Fall back to interactive prompts if OpenBao didn't work
-    if ! $OPENBAO_SECS_FETCHED; then
-        read -p "B2 Application Key: " B2_ACCOUNT_KEY <&3
-    fi
+    read -p "B2 Application Key: " B2_ACCOUNT_KEY <&3
 
     if [[ -n "$B2_ACCOUNT_KEY" ]]; then
-        if ! $OPENBAO_SECS_FETCHED; then
-            read -sp "Backup encryption password: " RESTIC_PASSWORD <&3
-            echo ""
-            read -sp "Confirm encryption password: " RESTIC_PASSWORD_CONFIRM <&3
-            echo ""
+        read -sp "Backup encryption password: " RESTIC_PASSWORD <&3
+        echo ""
+        read -sp "Confirm encryption password: " RESTIC_PASSWORD_CONFIRM <&3
+        echo ""
 
-            if [[ "$RESTIC_PASSWORD" != "$RESTIC_PASSWORD_CONFIRM" ]]; then
-                echo "ERROR: Passwords do not match"
-                exit 1
-            fi
+        if [[ "$RESTIC_PASSWORD" != "$RESTIC_PASSWORD_CONFIRM" ]]; then
+            echo "ERROR: Passwords do not match"
+            exit 1
         fi
 
         # Show masked password for confirmation
@@ -1502,7 +1426,6 @@ tmux send-keys -t "$SESSION_NAME" "unset CLAUDECODE && exec ${AGENT_ARGV[*]}" En
 # Attach to the session
 echo "Attaching to session: $SESSION_NAME"
 tmux -f "$TMUX_CONF" attach-session -t "$SESSION_NAME"
-# TEST
 STARTSH
 
     chmod +x "/home/$user/start.sh"

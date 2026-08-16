@@ -7,7 +7,7 @@ set -euo pipefail
 # Version: 1.1.5
 #
 # Usage (download and run - interactive prompts require terminal):
-#   curl -sLO https://raw.githubusercontent.com/jedarden/bootstrap/main/ex44/bootstrap-1.1.5.sh
+#   curl -sLO https://raw.githubusercontent.com/jedarden/bootstrap/main/hosts/ex44/bootstrap-1.1.5.sh
 #   chmod +x bootstrap-1.1.5.sh
 #   ./bootstrap-1.1.5.sh
 
@@ -18,15 +18,112 @@ YQ_VERSION="v4.44.1"
 KUBECTL_VERSION="v1.29.6"
 CLOUDFLARED_VERSION="2024.8.1"
 
-# Ensure interactive reads work even when piped (curl | bash)
-# Redirect all reads from /dev/tty
-exec 3</dev/tty || { echo "ERROR: No terminal available for interactive input"; exit 1; }
-
 # Handle --version flag
 if [[ "${1:-}" == "--version" ]] || [[ "${1:-}" == "-v" ]]; then
     echo "Hetzner EX44 Bootstrap v${VERSION}"
     exit 0
 fi
+
+# Handle --verify flag
+if [[ "${1:-}" == "--verify" ]] || [[ "${1:-}" == "--check" ]]; then
+    echo "=== Bootstrap Verification v${VERSION} ==="
+    echo ""
+
+    TOTAL_CHECKS=0
+    PASSED_CHECKS=0
+    FAILED_CHECKS=0
+
+    # Helper function for checks
+    run_check() {
+        local name="$1"
+        local command="$2"
+        local expected_pattern="${3:-.*}"
+
+        TOTAL_CHECKS=$((TOTAL_CHECKS + 1))
+        printf "%-40s " "$name:"
+
+        if output=$(eval "$command" 2>/dev/null); then
+            if echo "$output" | grep -qE "$expected_pattern"; then
+                echo "✓ PASS"
+                PASSED_CHECKS=$((PASSED_CHECKS + 1))
+                return 0
+            else
+                echo "✗ FAIL (unexpected output)"
+                FAILED_CHECKS=$((FAILED_CHECKS + 1))
+                return 1
+            fi
+        else
+            echo "✗ FAIL (command failed)"
+            FAILED_CHECKS=$((FAILED_CHECKS + 1))
+            return 1
+        fi
+    }
+
+    echo "=== Firewall ==="
+    run_check "UFW active" "ufw status | grep -q 'Status: active' && echo active" "active"
+    run_check "UFW default incoming policy" "ufw status verbose | grep 'Default:'" "deny.*incoming"
+    run_check "UFW allows Tailscale" "ufw status verbose | grep 'tailscale0'" "ALLOW"
+
+    echo ""
+    echo "=== Tailscale ==="
+    run_check "Tailscale connected" "tailscale status | grep -E '^(#.*Host|State)'" "active|running"
+
+    echo ""
+    echo "=== SSH Hardening ==="
+    run_check "PermitRootLogin prohibited" "sshd -T | grep permitrootlogin" "prohibit-password|no"
+    run_check "PasswordAuthentication disabled" "sshd -T | grep passwordauthentication" "no"
+    run_check "PubkeyAuthentication enabled" "sshd -T | grep pubkeyauthentication" "yes"
+    run_check "MaxAuthTries limited" "sshd -T | grep maxauthtries" "[1-6]"
+
+    echo ""
+    echo "=== Docker ==="
+    run_check "Docker installed" "command -v docker" "."
+    run_check "Docker can run containers" "docker run --rm hello-world 2>&1 | head -5" "Hello from Docker"
+
+    echo ""
+    echo "=== Security Services ==="
+    run_check "fail2ban installed" "command -v fail2ban-client" "."
+    run_check "fail2ban sshd jail active" "fail2ban-client status sshd" "Status.*enabled"
+    run_check "auditd installed" "command -v auditctl" "."
+    run_check "auditd has rules" "auditctl -l" "-a.*always"
+
+    echo ""
+    echo "=== Kernel Hardening ==="
+    run_check "rp_filter enabled" "sysctl -n net.ipv4.conf.all.rp_filter" "1"
+    run_check "tcp_syncookies enabled" "sysctl -n net.ipv4.tcp_syncookies" "1"
+    run_check "ASLR enabled" "sysctl -n kernel.randomize_va_space" "2"
+
+    echo ""
+    echo "=== Backup Configuration ==="
+    if [[ -f /etc/restic/b2.env ]]; then
+        run_check "Restic installed" "command -v restic" "."
+        run_check "B2 credentials configured" "cat /etc/restic/b2.env | grep B2_ACCOUNT_ID" "B2_ACCOUNT_ID"
+        run_check "Restic repository accessible" "source /etc/restic/b2.env && restic snapshots 2>&1 | head -1" "[a-f0-9]+"
+    else
+        echo "✓ Backup: SKIPPED (not configured)"
+    fi
+
+    echo ""
+    echo "=== Summary ==="
+    echo "Total checks: $TOTAL_CHECKS"
+    echo "Passed:       $PASSED_CHECKS"
+    echo "Failed:       $FAILED_CHECKS"
+    echo "Skipped:       $((TOTAL_CHECKS - PASSED_CHECKS - FAILED_CHECKS))"
+
+    if [[ $FAILED_CHECKS -eq 0 ]]; then
+        echo ""
+        echo "✓ All checks passed!"
+        exit 0
+    else
+        echo ""
+        echo "✗ Some checks failed. Review the output above."
+        exit 1
+    fi
+fi
+
+# Ensure interactive reads work even when piped (curl | bash)
+# Redirect all reads from /dev/tty
+exec 3</dev/tty || { echo "ERROR: No terminal available for interactive input"; exit 1; }
 
 # Handle both direct execution and sourcing
 if [[ -n "${BASH_SOURCE[0]:-}" ]]; then
@@ -34,7 +131,7 @@ if [[ -n "${BASH_SOURCE[0]:-}" ]]; then
 else
     SCRIPT_DIR="$(pwd)"
 fi
-REPO_URL="https://raw.githubusercontent.com/jedarden/bootstrap/main/ex44"
+REPO_URL="https://raw.githubusercontent.com/jedarden/bootstrap/main/hosts/ex44"
 
 echo "=== Hetzner EX44 Bootstrap v${VERSION} ==="
 echo ""
@@ -215,7 +312,7 @@ fi
 #   }
 # }
 fetch_secrets_from_openbao() {
-    local openbao_addr="https://traefil-rs-manager:8200"
+    local openbao_addr="https://traefik-rs-manager:8200"
     local secret_path="secret/bootstrap/${HARDWARE_UUID}/b2"
 
     # Only try if Tailscale is running (OpenBao is accessed over tailnet)
@@ -272,14 +369,20 @@ RESTORE_FROM_BACKUP=false
 if [[ -n "$B2_BUCKET" && -n "$B2_ACCOUNT_ID" ]]; then
     # Try OpenBao first if OPENBAO_TOKEN is set
     OPENBAO_SECS_FETCHED=false
-    if [[ -n "${OPENBAO_TOKEN:-}" ]]; then
+    if [[ -n "${OPENBAO_TOKEN:-}" ]] && command -v tailscale &>/dev/null && systemctl is-active --quiet tailscale; then
+        echo "Attempting to fetch B2 secrets from OpenBao..."
         if fetch_secrets_from_openbao; then
             OPENBAO_SECS_FETCHED=true
         fi
+    elif [[ -n "${OPENBAO_TOKEN:-}" ]]; then
+        echo "Note: OPENBAO_TOKEN set, but Tailscale not running yet."
+        echo "OpenBao fetch requires Tailscale connectivity. Falling back to interactive prompt."
+        echo "On re-run with Tailscale active, secrets will be fetched automatically."
     fi
 
     # Fall back to interactive prompts if OpenBao didn't work
     if ! $OPENBAO_SECS_FETCHED; then
+        echo ""
         read -p "B2 Application Key: " B2_ACCOUNT_KEY <&3
     fi
 
@@ -764,6 +867,8 @@ cat > /etc/ssh/sshd_config.d/hardening.conf << SSHCONF
 # === SSH Hardening Configuration ===
 
 # Authentication
+# PermitRootLogin set to prohibit-password (key-only) for Hetzner rescue network emergency access
+# This enables root login via SSH keys from the Hetzner rescue network while blocking password auth
 PermitRootLogin prohibit-password
 PasswordAuthentication no
 PermitEmptyPasswords no
@@ -773,6 +878,7 @@ ChallengeResponseAuthentication no
 UsePAM yes
 
 # Allowed users (dynamically configured)
+# root included for Hetzner rescue network emergency access path (documented in Recovery section)
 AllowUsers root $ALLOW_USERS_LIST
 
 # Security limits
@@ -784,6 +890,7 @@ ClientAliveCountMax 2
 
 # Disable unused features
 X11Forwarding no
+# AllowTcpForwarding enabled for VS Code Remote SSH port forwarding support
 AllowTcpForwarding yes
 AllowAgentForwarding no
 PermitTunnel no
@@ -1481,7 +1588,6 @@ tmux send-keys -t "$SESSION_NAME" "unset CLAUDECODE && exec ${AGENT_ARGV[*]}" En
 # Attach to the session
 echo "Attaching to session: $SESSION_NAME"
 tmux -f "$TMUX_CONF" attach-session -t "$SESSION_NAME"
-# TEST
 STARTSH
 
     chmod +x "/home/$user/start.sh"

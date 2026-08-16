@@ -56,7 +56,7 @@ curl -sL https://raw.githubusercontent.com/jedarden/bootstrap/main/ex44/bootstra
 
 The script will:
 1. Check if Tailscale is running (required for OpenBao access)
-2. Attempt to fetch secrets from `https://traefil-rs-manager:8200/v1/secret/bootstrap/<hardware-uuid>/b2`
+2. Attempt to fetch secrets from `https://traefik-rs-manager:8200/v1/secret/bootstrap/<hardware-uuid>/b2`
 3. Fall back to manual prompts if OpenBao is unreachable or secrets don't exist
 
 This is optional — the script works fine without OpenBao, just with manual secret entry each run.
@@ -76,7 +76,7 @@ This is optional — the script works fine without OpenBao, just with manual sec
 4. SSH back in after reboot: `ssh root@<your-server-ip>`
 5. Run bootstrap:
    ```bash
-   curl -sL https://raw.githubusercontent.com/jedarden/bootstrap/main/ex44/bootstrap.sh | bash
+   curl -sL https://raw.githubusercontent.com/jedarden/bootstrap/main/hosts/ex44/bootstrap.sh | bash
    ```
 6. Enter your Tailscale auth key when prompted
 7. Wait ~5-10 minutes for completion
@@ -97,9 +97,10 @@ ssh trading@<hostname>.tailnet
 - SSH from Hetzner rescue IPs only (emergency)
 
 ### SSH Hardening
-- No root login
-- No password authentication
-- Key-only with modern ciphers
+- Key-based root login allowed (Hetzner rescue network emergency access)
+- No password authentication (key-only for all users)
+- Modern ciphers and protocol hardening
+- TCP forwarding enabled (VS Code Remote SSH support)
 - Rate limiting (3 attempts, then ban)
 
 ### Kernel Hardening (sysctl)
@@ -191,7 +192,48 @@ If you lose Tailscale access:
 3. SSH in via public IP (allowed from Hetzner rescue)
 4. Mount filesystem and fix, or re-run bootstrap
 
-## Verification Commands
+## Automated Verification
+
+Run `bootstrap.sh --verify` (or `--check`) to automatically verify the bootstrap completed successfully. This runs all the checks below and reports a PASS/FAIL summary:
+
+```bash
+./bootstrap.sh --verify
+```
+
+**Exit code:** 0 if all checks pass, 1 if any check fails
+
+**Use cases:**
+- Right after bootstrap to confirm success
+- Periodically after `unattended-upgrades` runs (catches config drift)
+- In CI/CD pipelines or monitoring scripts
+
+**Example output:**
+```
+=== Bootstrap Verification v1.1.5 ===
+
+=== Firewall ===
+UFW active:                             ✓ PASS
+UFW default incoming policy:            ✓ PASS
+UFW allows Tailscale:                   ✓ PASS
+
+=== Tailscale ===
+Tailscale connected:                    ✓ PASS
+
+=== SSH Hardening ===
+PermitRootLogin prohibited:             ✓ PASS
+PasswordAuthentication disabled:        ✓ PASS
+PubkeyAuthentication enabled:           ✓ PASS
+MaxAuthTries limited:                   ✓ PASS
+
+=== Summary ===
+Total checks: 16
+Passed:       16
+Failed:       0
+
+✓ All checks passed!
+```
+
+## Manual Verification Commands
 
 ```bash
 # Firewall

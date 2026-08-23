@@ -1133,7 +1133,7 @@ echo "=== Step 13: Setting Up start.sh for Users ==="
 for user in "${USERS[@]}"; do
     echo "Setting up start.sh for user: $user"
     cat > "/home/$user/start.sh" << 'STARTSH'
-#!/bin/bash
+#!/usr/bin/env bash
 
 # start.sh - Tmux + coding-agent launcher with self-update
 #

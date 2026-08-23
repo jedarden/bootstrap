@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # start.sh - Tmux + coding-agent launcher with self-update
 #

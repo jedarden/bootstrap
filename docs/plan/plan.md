@@ -29,11 +29,9 @@ Forgejo directly — see ADR-1 for why that's intentional, not an oversight.
 
 ## Open Questions
 
-- Is `AllowTcpForwarding yes` (re-enabled in the SSH hardening step alongside
-  `PermitRootLogin prohibit-password`, both loosened at some point after the
-  original hardened defaults of `no`/`no`) an intentional tradeoff for some
-  workflow, or drift that should be tightened back up? Worth a decision either
-  way instead of silent divergence from the README's stated security posture.
+- None open. (The 2026-07-20 question about `AllowTcpForwarding yes` /
+  `PermitRootLogin prohibit-password` being drift vs. tradeoff was resolved
+  by ADR-6 — they are intentional; see there for the git-history evidence.)
 
 ## ADR-1: 2026-07-20 — Single canonical source for start.sh, with a hard syntax gate on self-update
 
@@ -444,3 +442,80 @@ Adopt `hosts/<hostname>/` as the layout:
 - `git log --follow` tracks the untouched files across the move; the two
   files that already had a `hosts/ex44/` lineage (`bootstrap.sh`,
   `README.md`) carry their history from 385918b instead.
+
+## ADR-6: 2026-08-23 — SSH posture: `prohibit-password` root and TCP forwarding are intentional, not drift
+
+### Context
+
+The original Step 7 hardened defaults (`/etc/ssh/sshd_config.d/hardening.conf`)
+were `PermitRootLogin no`, `AllowTcpForwarding no`, and an `AllowUsers` list
+without root. Commit 0b826f5 ("Update bootstrap.sh to v1.1.4", 2026-04-03)
+loosened all three in one deliberate change whose message names the reasons:
+"AllowTcpForwarding yes (fixes VS Code cloudflared connections)",
+"PermitRootLogin prohibit-password (re-enables root SSH via key)", and
+"Add root to AllowUsers". The README was *not* updated at the time, and its
+Security Features section still said "No root login" — the silent doc/config
+divergence this plan recorded as its first Open Question (2026-07-20) and
+that bead `bootstra-349e7feb` asked to resolve.
+
+The divergence turned out to be an artifact of the two-lineage split
+described in ADR-5: the corrected documentation shipped with the
+`hosts/ex44/` lineage from its creation (385918b, 2026-08-15) — a Security
+Features section reading "Key-based root login allowed (Hetzner rescue
+network emergency access)" and "TCP forwarding enabled (VS Code Remote SSH
+support)", plus an inline comment on each of the three settings in the Step 7
+heredoc — while the stale pre-drift prose lived on in the old
+`ex44/README.md` until ADR-5 deleted that lineage on 2026-08-23.
+
+### Decision
+
+Keep the current posture; do not tighten back. Each setting is an
+intentional tradeoff:
+
+- **`PermitRootLogin prohibit-password` + `root` in `AllowUsers`** — the
+  emergency-access path. UFW admits port 22 only from the Hetzner
+  rescue-network ranges (FSN + NBG) and the `tailscale0` interface, and the
+  README's Recovery section documents reaching the box via public IP from
+  Hetzner Robot when Tailscale is down — that path needs root SSH permitted.
+  Root remains key-only (`PasswordAuthentication no`,
+  `AuthenticationMethods publickey`), so the added exposure is "anyone
+  holding the operator's SSH key can reach root", which the key
+  distribution already assumes.
+- **`AllowTcpForwarding yes`** — VS Code Remote SSH (and the optional
+  cloudflared tunnel, Step 11) needs port forwarding through the SSH
+  connection; `no` broke that workflow in practice, which is why v1.1.4
+  re-enabled it as a fix. `AllowAgentForwarding no` and `PermitTunnel no`
+  are retained, so forwarding cannot be used to pivot agent credentials or
+  layer-2 tunnels.
+
+The documentation side is already in place in the canonical files:
+`hosts/ex44/README.md`'s Security Features describes this posture, and the
+Step 7 heredoc comments name each rationale. This ADR adds the missing
+piece — the decision record tying them to the git-history evidence.
+Verified 2026-08-23 that the live host (`hetzner-ex44`) runs exactly this
+config: `permit-password` root, `AllowUsers root coding trading`, forwarding
+on, password auth off.
+
+### Alternatives Considered
+
+- **Tighten back to `no`/`no`/no-root** to match the original hardened
+  defaults. Rejected: it breaks the VS Code Remote SSH workflow and closes
+  the only documented access path when Tailscale is down. The marginal
+  hardening (key-only root *doesn't* exist; forwarding *can't* be used)
+  protects against an attacker who already holds the operator's SSH key or
+  a session on the box — not a meaningfully different threat for a
+  single-operator dedicated server reachable only over Tailscale plus
+  Hetzner's own rescue ranges.
+- **Keep the settings, leave the README describing the stricter posture.**
+  Rejected — that is the silent divergence that prompted the question in
+  the first place.
+
+### Consequences
+
+- The 2026-07-20 Open Question is resolved (removed from the list above).
+- A future change to any of these three settings must update, in the same
+  commit: the `hosts/ex44/README.md` Security Features bullets, the Step 7
+  heredoc comments, and (per this doc's rules) a superseding ADR linked
+  back to this one.
+- New fleet hosts (`hosts/<name>/`) inherit this posture by copying
+  `hosts/ex44/`, so it is the fleet baseline, not an ex44-only exception.

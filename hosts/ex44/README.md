@@ -198,41 +198,46 @@ If you lose Tailscale access:
 Run `bootstrap.sh --verify` (or `--check`) to automatically verify the bootstrap completed successfully. This runs all the checks below and reports a PASS/FAIL summary:
 
 ```bash
-./bootstrap.sh --verify
+sudo ./bootstrap.sh --verify
 ```
 
-**Exit code:** 0 if all checks pass, 1 if any check fails
+Run it as root (or with `sudo`): the UFW, `sshd -T`, fail2ban and auditd checks read state only root can see — an unprivileged run prints a warning up front and those checks report FAIL. The mode is safe to run unattended: it normalizes `PATH` (ufw and sysctl live in `/usr/sbin`, which cron omits) and `XDG_RUNTIME_DIR` (rootless Docker's socket), and every check is read-only.
+
+**Exit code:** 0 if all checks pass, 1 if any check fails. All checks always run and the summary always prints — one failure never hides the rest.
 
 **Use cases:**
 - Right after bootstrap to confirm success
 - Periodically after `unattended-upgrades` runs (catches config drift)
-- In CI/CD pipelines or monitoring scripts
+- From cron or a NEEDLE worker, alerting on the exit code
 
 **Example output:**
 ```
-=== Bootstrap Verification v1.1.5 ===
+=== Bootstrap Verification v1.1.6 ===
 
 === Firewall ===
-UFW active:                             ✓ PASS
-UFW default incoming policy:            ✓ PASS
-UFW allows Tailscale:                   ✓ PASS
+UFW active:                              ✓ PASS
+UFW default incoming policy:             ✓ PASS
+UFW allows Tailscale:                    ✓ PASS
 
 === Tailscale ===
-Tailscale connected:                    ✓ PASS
+Tailscale connected:                     ✓ PASS
 
 === SSH Hardening ===
-PermitRootLogin prohibited:             ✓ PASS
-PasswordAuthentication disabled:        ✓ PASS
-PubkeyAuthentication enabled:           ✓ PASS
-MaxAuthTries limited:                   ✓ PASS
+PermitRootLogin prohibited:              ✓ PASS
+PasswordAuthentication disabled:         ✗ FAIL (got: passwordauthentication yes)
+PubkeyAuthentication enabled:            ✓ PASS
+MaxAuthTries limited:                    ✓ PASS
 
 === Summary ===
-Total checks: 16
-Passed:       16
-Failed:       0
+Total checks: 20
+Passed:       19
+Failed:       1
+Skipped:      0
 
-✓ All checks passed!
+✗ Some checks failed. Review the output above.
 ```
+
+A failed check prints the actual value it found (`got: ...`) so drift is visible directly in the output. On a host without backup configured, the Backup section reports `SKIPPED` (counted in the summary) instead of failing.
 
 ## Manual Verification Commands
 

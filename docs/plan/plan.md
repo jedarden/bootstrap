@@ -29,10 +29,6 @@ Forgejo directly — see ADR-1 for why that's intentional, not an oversight.
 
 ## Open Questions
 
-- Should `ex44/` become `hosts/ex44/` (or similar) now that a second machine
-  (`lab.ardenone.com`) exists in the same fleet running the same script? The
-  README's "Future Plans" (Ansible playbooks, K8s-triggered provisioning) both
-  assume more than one target eventually.
 - Is `AllowTcpForwarding yes` (re-enabled in the SSH hardening step alongside
   `PermitRootLogin prohibit-password`, both loosened at some point after the
   original hardened defaults of `no`/`no`) an intentional tradeoff for some
@@ -376,3 +372,75 @@ out.
 - Enforcement is per-clone opt-in until CI exists: a checkout that skips
   `git config core.hooksPath githooks` gets no enforcement. The README
   documents the one-liner.
+
+## ADR-5: 2026-08-23 — Multi-host layout: one directory per fleet host under `hosts/`
+
+### Context
+
+`lab.ardenone.com` has run the same bootstrap script and `start.sh` as
+`ex44.jedarden.com` since the fleet gained its second machine, and the
+README's stated future plans (Ansible drift management, K8s-triggered
+provisioning) both assume more than one target host. The repo, however, was
+still laid out as a single-host repo: everything lived under `ex44/`.
+
+The restructure had also already half-happened, without a decision behind
+it: commit 385918b (2026-08-15) created `hosts/ex44/bootstrap.sh` and
+`hosts/ex44/README.md` as a parallel copy while `ex44/` stayed in place,
+leaving **two tracked lineages of `bootstrap.sh` diverging in one repo**.
+The `hosts/` copy was the more evolved one (it carried the `--verify` mode,
+the OpenBao Tailscale-guard fix, the `traefil`→`traefik` hostname fix, and
+`REPO_URL`/quickstart URLs already pointing at `hosts/ex44`), but nothing
+recorded which copy was canonical — the exact ambiguity this ADR closes.
+
+### Decision
+
+Adopt `hosts/<hostname>/` as the layout:
+
+- `ex44/` → `hosts/ex44/`. The merge keeps the evolved Aug-15
+  `hosts/ex44/` `bootstrap.sh` and `README.md`, and moves everything else —
+  `start.sh`, `start.sh.version`, `sync-start-sh.sh`, `keys/`, and the
+  versioned `bootstrap-<version>.sh` archives — from `ex44/` unchanged.
+  `ex44/` ceases to exist; there is exactly one canonical script again.
+- **One shared script serves the whole fleet.** `hosts/lab/` is created only
+  when lab needs host-specific content (different keys, backup targets, or
+  hardening), by copying the then-current `hosts/ex44/` script and diverging
+  from there; per-host keys and archives then live under that host's
+  directory. New hosts get `hosts/<name>/` at bootstrap time.
+- `start.sh` v1.2.2 moves its `REPO_URL` to
+  `.../bootstrap/main/hosts/ex44` (version bumped per the standing edit
+  procedure — `REPO_URL` is behavior, not comment).
+
+### Alternatives Considered
+
+- **`shared/` plus per-host thin overlays.** Rejected: the script is
+  consumed as one self-contained file over a raw HTTPS URL (`curl | bash`,
+  fleet self-update, key fetch); overlays would fragment that path and add
+  indirection to serve divergence that does not exist yet.
+- **Do nothing until lab actually diverges.** Rejected: the two-lineage
+  state already existed in git and actively misleads (two `bootstrap.sh`
+  copies, one answering to the name the docs use); the raw URLs and the
+  self-update path also need one stable home regardless of divergence.
+- **Top-level per-host dirs (`ex44/`, `lab/`).** Rejected: a `hosts/`
+  namespace keeps fleet targets distinguishable from `docs/`, `githooks/`,
+  etc. as the repo grows, at the cost of one path component.
+
+### Consequences
+
+- Every raw URL moves (quickstart lines, `REPO_URL`, the key fetch). Old
+  `.../bootstrap/main/ex44/*` URLs 404 once this lands on the GitHub mirror.
+- Deployed launchers self-update from the `REPO_URL` baked into each copy,
+  so a host still holding a pre-1.2.2 launcher gets a 404 on
+  `start.sh.version` after the move. `check_for_self_update` treats that as
+  "can't check" and continues (`curl -sf` failure → empty remote version →
+  skip), so nothing bricks — but such a copy never self-updates again until
+  it is manually refreshed from `hosts/ex44/start.sh`. ex44's `~/start.sh`
+  was refreshed to the canonical v1.2.2 as part of this change;
+  `lab.ardenone.com` still needs its one-time manual refresh.
+- The pre-commit hook (ADR-4) already discovers `hosts/ex44` from the index
+  first and survives the move unchanged.
+- Path references in ADR-1..4 written as `ex44/...` now resolve under
+  `hosts/ex44/...`; per this doc's own rule the earlier ADRs are left as
+  written.
+- `git log --follow` tracks the untouched files across the move; the two
+  files that already had a `hosts/ex44/` lineage (`bootstrap.sh`,
+  `README.md`) carry their history from 385918b instead.

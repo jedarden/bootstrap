@@ -51,7 +51,7 @@ Instead of entering secrets manually each bootstrap run, you can pre-provision t
 **To use OpenBao sourcing:**
 ```bash
 export OPENBAO_TOKEN="your-openbao-token"
-curl -sL https://raw.githubusercontent.com/jedarden/bootstrap/main/ex44/bootstrap.sh | bash
+curl -sL https://raw.githubusercontent.com/jedarden/bootstrap/main/hosts/ex44/bootstrap.sh | bash
 ```
 
 The script will:
@@ -144,13 +144,14 @@ ssh trading@<hostname>.tailnet
 ## File Structure
 
 ```
-ex44/
+hosts/ex44/
 ├── bootstrap.sh         # Main bootstrap script (embeds start.sh, see below)
 ├── start.sh             # Canonical tmux + coding-agent launcher (self-updating)
 ├── start.sh.version     # Version string self-update compares against
 ├── sync-start-sh.sh     # Regenerates bootstrap.sh's embedded copy from start.sh
 ├── keys/
-│   └── jedarden.pub     # SSH public key
+│   ├── jedarden.pub     # SSH public keys fetched at bootstrap time
+│   └── jeda-mbp.pub     # (both are installed; jeda-mbp is optional)
 └── README.md            # This file
 ```
 
@@ -162,7 +163,7 @@ already-bootstrapped host's `start.sh` self-updates from the standalone
 `START_SH_VERSION` (inside `start.sh`) and `start.sh.version` — never hand-edit
 the embedded copy in `bootstrap.sh` directly, and never hand-patch a deployed
 `~/start.sh` on a host (land the change here first). See
-`../docs/plan/plan.md` ADR-1 for why this matters — both failure modes it
+`../../docs/plan/plan.md` ADR-1 for why this matters — both failure modes it
 guards against already happened once.
 
 **start.sh launches claude or codex.** Selection order is `--agent
@@ -176,7 +177,7 @@ entirely and execs the agent in the current pane rather than nesting. herdr is
 checked first, since herdr rides on the same ambient tmux server and a herdr
 pane has both variables set. On a bare shell the original behavior is
 unchanged: a new phonetic-alphabet tmux session, then attach. See
-`../docs/plan/plan.md` ADR-2 and ADR-3.
+`../../docs/plan/plan.md` ADR-2 and ADR-3.
 
 ```bash
 ./start.sh                    # prompt (or claude if no TTY)

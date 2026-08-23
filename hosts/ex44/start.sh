@@ -13,12 +13,12 @@
 # first run; every host's copy self-updates from this file afterward (see
 # check_for_self_update below). Never hand-edit a deployed ~/start.sh on a
 # host and never edit only one of the two copies in this repo - run
-# ex44/sync-start-sh.sh after any change here to regenerate bootstrap.sh's
-# embedded copy, then commit both together. See docs/plan/plan.md ADR-1 for
-# why (a hand-patched host copy and a corrupted embedded copy both went
-# undetected in the wild before this rule existed).
-START_SH_VERSION="1.2.1"
-REPO_URL="https://raw.githubusercontent.com/jedarden/bootstrap/main/ex44"
+# hosts/ex44/sync-start-sh.sh after any change here to regenerate
+# bootstrap.sh's embedded copy, then commit both together. See
+# docs/plan/plan.md ADR-1 for why (a hand-patched host copy and a corrupted
+# embedded copy both went undetected in the wild before this rule existed).
+START_SH_VERSION="1.2.2"
+REPO_URL="https://raw.githubusercontent.com/jedarden/bootstrap/main/hosts/ex44"
 
 usage() {
     cat <<'USAGE'

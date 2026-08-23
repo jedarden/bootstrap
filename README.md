@@ -6,7 +6,19 @@ Infrastructure bootstrap scripts for various server configurations.
 
 | Directory | Description |
 |-----------|-------------|
-| [ex44/](./ex44/) | Hetzner EX44 dedicated server setup |
+| [hosts/ex44/](./hosts/ex44/) | Hetzner EX44 dedicated server setup — the fleet's canonical script; lab.ardenone.com runs it verbatim |
+
+## Repo Layout
+
+One directory per fleet host under `hosts/` (`hosts/ex44/`, and `hosts/lab/`
+when lab ever needs host-specific content). The bootstrap and launcher
+scripts are consumed as single self-contained files over raw HTTPS, so there
+is no shared/overlay layer: while two hosts run identical content they share
+one directory, and a host gets its own directory by copying the current
+script the moment it needs to diverge (different keys, backup targets, or
+hardening). Versioned script archives (`bootstrap-<version>.sh`) live
+alongside the current script in the host directory that shipped them. See
+`docs/plan/plan.md` ADR-5 for the full decision.
 
 ## Philosophy
 

@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# Pre-commit hook: refuse to commit while bootstrap.sh's embedded start.sh
+# copy is out of sync with the canonical start.sh. See docs/plan/plan.md
+# (ADR-1 for why the embedded copy is generated, ADR-4 for this hook).
+#
+# Design notes:
+#   - Checks the INDEX (what is being committed), not the working tree, so
+#     unrelated unstaged edits can't block a commit and a stale working tree
+#     can't let a bad pair through.
+#   - Discovers the host directory in the index, tolerating both the
+#     pre-restructure layout (ex44/) and the multi-host layout (hosts/ex44/).
+#   - Runs the sync script from a temp copy so it can never write to the
+#     working tree from inside a hook.
+#
+# One-time install per clone (hooks are not versioned by git itself):
+#   git config core.hooksPath githooks
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+
+# Locate the directory holding the sync script in this commit's index.
+dir=""
+for candidate in hosts/ex44 ex44; do
+    if git cat-file -e ":$candidate/sync-start-sh.sh" 2>/dev/null; then
+        dir="$candidate"
+        break
+    fi
+done
+# No sync script in the index -> nothing to enforce.
+[[ -n "$dir" ]] || exit 0
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+for f in sync-start-sh.sh start.sh bootstrap.sh; do
+    git show ":$dir/$f" > "$tmp/$f" 2>/dev/null || exit 0  # partial layout; skip
+done
+chmod +x "$tmp/sync-start-sh.sh"
+
+if ! "$tmp/sync-start-sh.sh" --check; then
+    echo "" >&2
+    echo "COMMIT BLOCKED: $dir/bootstrap.sh's embedded start.sh copy is out of" >&2
+    echo "sync with $dir/start.sh. Run '$dir/sync-start-sh.sh' and commit both" >&2
+    echo "files together. See docs/plan/plan.md ADR-1." >&2
+    exit 1
+fi

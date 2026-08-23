@@ -323,3 +323,56 @@ the log line, and degrades to "unknown" if that fails.
   longer creates a session, and `prefix + r` still reloads config by hand.
 - All three launch contexts (herdr pane, tmux client, bare shell) are now
   explicit and tested, rather than two explicit ones and an unhandled case.
+
+## ADR-4: 2026-08-23 — Sync enforcement moved from discipline to a pre-commit hook
+
+### Context
+
+ADR-1 left running the sync script as a manual step ("must actually be run —
+it's not wired into a commit hook or CI yet"). The gap admitted real
+failures: a `# TEST` debug line landed in `bootstrap.sh`'s embedded copy
+with no matching change to the standalone `start.sh` (introduced across the
+2026-08 IPv6-hardening series, unnoticed on main until the hook's first
+run), which is the same hand-discipline failure mode ADR-1 was written
+after. This repo has no CI — GitHub Actions are disabled org-wide and no
+Argo Workflow is wired up for it — so nothing stood between a forgotten
+sync run and the repo.
+
+### Decision
+
+Enforce at commit time with a versioned pre-commit hook:
+`githooks/pre-commit`, activated per clone with
+`git config core.hooksPath githooks` (git does not version hooks itself).
+
+The hook checks the **index**, not the working tree. It materializes the
+staged `start.sh`, `bootstrap.sh`, and `sync-start-sh.sh` into a temp
+directory and runs `sync-start-sh.sh --check` there — validating exactly
+what is being committed, never writing to the working tree from inside a
+hook, and tolerating both the `ex44/` and `hosts/ex44/` layouts (discovered
+from the index, `hosts/` first, so it survives the multi-host restructure
+without changes). `--check` diffs without writing and exits nonzero on
+mismatch; the hook turns that into a blocked commit with the fix spelled
+out.
+
+### Alternatives Considered
+
+- **Argo Workflow CI check.** Deferred, not rejected — no workflow is wired
+  up for this repo, and a hook catches the mistake at the moment of commit
+  rather than after push. CI becomes worth it if contributors routinely
+  bypass hooks.
+- **Installing into `.git/hooks/pre-commit` directly.** Not versioned; lost
+  on every fresh clone and invisible in review. The versioned `githooks/`
+  dir plus one documented config command per clone keeps the hook in the
+  repo's history.
+
+### Consequences
+
+- The `# TEST` drift is reverted in the same commit that introduces the
+  hook, so the pair the hook first guards is in sync — the hook never
+  blocks unrelated commits over pre-existing drift.
+- Unstaged working-tree edits cannot block an unrelated commit, and a stale
+  working tree cannot smuggle a bad pair past the check; only the staged
+  pair matters.
+- Enforcement is per-clone opt-in until CI exists: a checkout that skips
+  `git config core.hooksPath githooks` gets no enforcement. The README
+  documents the one-liner.

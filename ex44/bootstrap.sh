@@ -1481,7 +1481,6 @@ tmux send-keys -t "$SESSION_NAME" "unset CLAUDECODE && exec ${AGENT_ARGV[*]}" En
 # Attach to the session
 echo "Attaching to session: $SESSION_NAME"
 tmux -f "$TMUX_CONF" attach-session -t "$SESSION_NAME"
-# TEST
 STARTSH
 
     chmod +x "/home/$user/start.sh"

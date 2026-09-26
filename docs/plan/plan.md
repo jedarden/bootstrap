@@ -519,3 +519,60 @@ on, password auth off.
   back to this one.
 - New fleet hosts (`hosts/<name>/`) inherit this posture by copying
   `hosts/ex44/`, so it is the fleet baseline, not an ex44-only exception.
+
+## ADR-7: 2026-09-26 — Expose start.sh as a `start` command via symlink, not by moving the file
+
+### Context
+
+The launcher was run as `./start.sh --agent codex`, a script sitting in the
+home directory. The wanted interface is a command on `PATH`: `start claude`,
+`start codex`.
+
+Two facts constrain how to get there. Every already-bootstrapped host
+self-updates from `$REPO_URL/start.sh` and writes the result to
+`$SCRIPT_DIR/start.sh`, so the deployed path is load-bearing for the whole
+fleet. And `sync-start-sh.sh` locates the embedded copy by the heredoc line
+`cat > "/home/$user/start.sh"`, so moving the deployed file also means
+changing that marker in the same commit as everything else.
+
+### Decision
+
+`~/start.sh` stays the single deployed, self-updating file. `~/.local/bin/start`
+is a **symlink** to it (v1.3.0). The script now resolves its real path with
+`readlink -f`, so `SCRIPT_DIR` (and with it the tmux config directory, the
+session working directory and the self-update target) is the same whether it is
+launched as `~/start.sh` or through the link. Without that, launching via the
+link would silently relocate `.tmux/` to `~/.local/bin/`.
+
+The agent is also accepted positionally (`start codex`). `--agent` and
+`START_SH_AGENT` keep working; a positional agent that disagrees with `--agent`
+is an error rather than a silent precedence rule.
+
+Link creation happens in two places: Step 13 of `bootstrap.sh` (as the user,
+via `su -`, so `~/.local` is never root-owned), and `ensure_start_command` in
+the script itself for hosts that predate it. The latter is deliberately narrow:
+it acts only when the real path is `$HOME/start.sh`, and never replaces an
+existing `start`.
+
+### Alternatives rejected
+
+- **Move the real file to `~/.local/bin/start`, leave `~/start.sh` as a
+  compatibility symlink.** Cleaner end state, but it changes the path every
+  deployed host self-updates into, forces a per-host migration step inside the
+  script, and requires changing the sync script's heredoc marker in lockstep.
+  Risk for no change in the interface the user sees.
+- **Auto-link from any location.** A run from a repo checkout would point
+  `start` at a tracked file, and the next self-update would write the fetched
+  script through the link into the working tree.
+- **A compiled binary.** The launcher is a thin `exec` wrapper around tools
+  that are themselves on `PATH`; nothing in it needs compiling.
+
+### Consequences
+
+- Hosts converge without operator action: self-update lands v1.3.0, and the
+  first run afterwards creates the link and prints one line saying so.
+- `~/start.sh` remains in the home directory. If the file ever moves, the
+  self-update path, the sync marker and this ADR change together.
+- Sandbox-tested: fresh link, re-run, pre-existing unrelated `start`, launch
+  through the link, non-deployed copy (no link), self-update through the link,
+  and a real v1.2.2 to v1.3.0 upgrade.

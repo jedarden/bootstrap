@@ -1137,6 +1137,11 @@ for user in "${USERS[@]}"; do
 
 # start.sh - Tmux + coding-agent launcher with self-update
 #
+# Run it as the `start` command: `start claude` or `start codex`. The deployed
+# file stays ~/start.sh (the path self-update and the sync script key on);
+# ~/.local/bin/start is a symlink to it, created by bootstrap.sh and, on hosts
+# that predate it, by ensure_start_command below.
+#
 # Launches an interactive coding agent - claude or codex. On a bare shell it
 # creates a phonetic-alphabet tmux session and starts the agent inside it.
 # When something is already multiplexing - a herdr pane (HERDR_ENV, injected
@@ -1152,20 +1157,22 @@ for user in "${USERS[@]}"; do
 # bootstrap.sh's embedded copy, then commit both together. See
 # docs/plan/plan.md ADR-1 for why (a hand-patched host copy and a corrupted
 # embedded copy both went undetected in the wild before this rule existed).
-START_SH_VERSION="1.2.2"
+START_SH_VERSION="1.3.0"
 REPO_URL="https://raw.githubusercontent.com/jedarden/bootstrap/main/hosts/ex44"
 
 usage() {
     cat <<'USAGE'
-Usage: start.sh [--agent claude|codex] [--no-update] [--version] [--help]
+Usage: start [claude|codex] [--agent claude|codex] [--no-update] [--version] [--help]
 
+  claude | codex   Coding agent to launch, e.g. `start codex`. Equivalent to
+                   --agent <name>; giving both with different values is an error.
   --agent <name>   Coding agent to launch: claude (default) or codex.
                    Also settable via the START_SH_AGENT environment variable.
-                   If neither is given and stdin is a TTY, start.sh prompts;
+                   If none of these is given and stdin is a TTY, start prompts;
                    with no TTY it defaults to claude so that scripted or
                    piped invocations never block on the prompt.
-  --no-update      Skip the start.sh self-update check.
-  --version, -v    Print the start.sh version and exit.
+  --no-update      Skip the start self-update check.
+  --version, -v    Print the start version and exit.
   --help, -h       Show this help and exit.
 USAGE
 }
@@ -1176,11 +1183,12 @@ ORIGINAL_ARGS=("$@")
 
 SKIP_UPDATE=false
 AGENT=""
+POSITIONAL_AGENT=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --version|-v)
-            echo "start.sh v${START_SH_VERSION}"
+            echo "start v${START_SH_VERSION}"
             exit 0
             ;;
         --help|-h)
@@ -1203,16 +1211,42 @@ while [[ $# -gt 0 ]]; do
             AGENT="${1#--agent=}"
             shift
             ;;
-        *)
+        claude|codex)
+            if [[ -n "$POSITIONAL_AGENT" ]]; then
+                echo "Error: agent given twice: $POSITIONAL_AGENT and $1" >&2
+                exit 1
+            fi
+            POSITIONAL_AGENT="$1"
+            shift
+            ;;
+        -*)
             echo "Error: unknown option: $1" >&2
+            usage >&2
+            exit 1
+            ;;
+        *)
+            echo "Error: unknown agent '$1' (expected claude or codex)" >&2
             usage >&2
             exit 1
             ;;
     esac
 done
 
-# Get the directory where this script is located
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -n "$POSITIONAL_AGENT" ]]; then
+    if [[ -n "$AGENT" && "$AGENT" != "$POSITIONAL_AGENT" ]]; then
+        echo "Error: conflicting agents: '$POSITIONAL_AGENT' and --agent '$AGENT'" >&2
+        exit 1
+    fi
+    AGENT="$POSITIONAL_AGENT"
+fi
+
+# Resolve symlinks so the script behaves identically whether it runs as
+# ~/start.sh or through the `start` symlink on PATH (~/.local/bin/start).
+# dirname of BASH_SOURCE[0] alone would name the symlink's directory, which
+# would relocate the tmux config and point self-update at the wrong file.
+SELF_PATH="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || true)"
+[[ -n "$SELF_PATH" ]] || SELF_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$(dirname "$SELF_PATH")"
 TMUX_DIR="$SCRIPT_DIR/.tmux"
 TMUX_CONF="$TMUX_DIR/tmux.conf"
 TPM_DIR="$TMUX_DIR/plugins/tpm"
@@ -1242,10 +1276,10 @@ check_for_self_update() {
             # login page, truncated fetch, or corrupted commit) - verify it
             # parses as valid bash before overwriting the working script.
             if [[ -n "$new_script" ]] && bash -n <(printf '%s' "$new_script") 2>/dev/null; then
-                echo "$new_script" > "$SCRIPT_DIR/start.sh"
-                chmod +x "$SCRIPT_DIR/start.sh"
+                echo "$new_script" > "$SELF_PATH"
+                chmod +x "$SELF_PATH"
                 echo "Updated! Restarting..."
-                exec "$SCRIPT_DIR/start.sh" --no-update ${ORIGINAL_ARGS[@]+"${ORIGINAL_ARGS[@]}"}
+                exec "$SELF_PATH" --no-update ${ORIGINAL_ARGS[@]+"${ORIGINAL_ARGS[@]}"}
             elif [[ -n "$new_script" ]]; then
                 echo "Warning: fetched start.sh failed syntax check, keeping current version $START_SH_VERSION"
             fi
@@ -1254,6 +1288,30 @@ check_for_self_update() {
 }
 
 check_for_self_update
+
+# Expose the deployed copy as the `start` command. Hosts bootstrapped before
+# this existed get the link here, on the first run after self-update lands it.
+# Only ever from the deployed location: linking a repo checkout would make
+# self-update write through the link into a tracked file. Never replaces an
+# existing `start` that is not this script.
+ensure_start_command() {
+    local deployed link="$HOME/.local/bin/start"
+    deployed="$(readlink -f "$HOME" 2>/dev/null)/start.sh"
+    [[ "$SELF_PATH" == "$deployed" ]] || return 0
+
+    if [[ -L "$link" && "$(readlink -f "$link" 2>/dev/null)" == "$SELF_PATH" ]]; then
+        return 0
+    fi
+    if [[ -e "$link" || -L "$link" ]]; then
+        echo "Note: $link already exists and is not this script - leaving it alone." >&2
+        return 0
+    fi
+    if mkdir -p "$HOME/.local/bin" 2>/dev/null && ln -s "$SELF_PATH" "$link" 2>/dev/null; then
+        echo "Installed the 'start' command: $link -> $SELF_PATH"
+    fi
+}
+
+ensure_start_command
 
 # Phonetic alphabet for tmux session naming
 PHONETIC_ALPHABET=(
@@ -1633,6 +1691,13 @@ STARTSH
 
     chmod +x "/home/$user/start.sh"
     chown "$user:$user" "/home/$user/start.sh"
+
+    # Expose it as the `start` command (`start claude` / `start codex`). A
+    # symlink, so the self-updating ~/start.sh stays the one deployed copy.
+    # Run as the user so ~/.local is never root-owned; an existing `start`
+    # (a re-run, or something unrelated) is left alone.
+    su - "$user" -c 'mkdir -p "$HOME/.local/bin" && { [ -e "$HOME/.local/bin/start" ] || [ -L "$HOME/.local/bin/start" ] || ln -s "$HOME/start.sh" "$HOME/.local/bin/start"; }' \
+        || echo "Warning: could not link ~/.local/bin/start for $user"
 done
 
 echo ""
@@ -2156,7 +2221,7 @@ fi
 echo ""
 echo "Quick start:"
 echo "  1. SSH to server: ssh ${USERS[0]}@$TAILSCALE_HOSTNAME"
-echo "  2. Run start.sh to launch a coding agent (claude or codex) in tmux"
+echo "  2. Run 'start claude' or 'start codex' to launch a coding agent in tmux"
 echo ""
 echo "Verification commands:"
 echo "  ufw status              # Firewall rules"

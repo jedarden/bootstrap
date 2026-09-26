@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Regenerates the start.sh heredoc embedded in bootstrap.sh (Step 13, "Setting
 # Up start.sh for Users") from the canonical, independently-runnable
 # start.sh that sits next to this script.

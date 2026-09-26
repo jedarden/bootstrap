@@ -166,10 +166,20 @@ the embedded copy in `bootstrap.sh` directly, and never hand-patch a deployed
 `../../docs/plan/plan.md` ADR-1 for why this matters — both failure modes it
 guards against already happened once.
 
-**start.sh launches claude or codex.** Selection order is `--agent
-claude|codex` > `$START_SH_AGENT` > interactive prompt > `claude`. The prompt
-only appears when stdin is a TTY, so non-interactive invocations take the
-`claude` default instead of blocking.
+**start.sh launches claude or codex, as the `start` command.** Selection order
+is the positional agent (`start codex`) or `--agent claude|codex` >
+`$START_SH_AGENT` > interactive prompt > `claude`. The prompt only appears when
+stdin is a TTY, so non-interactive invocations take the `claude` default
+instead of blocking. Giving a positional agent and a different `--agent` is an
+error.
+
+`~/.local/bin/start` is a **symlink** to `~/start.sh`, not a second copy:
+`bootstrap.sh` creates it, and hosts bootstrapped earlier get it on the first
+run after self-update lands v1.3.0. `~/start.sh` stays the deployed file so
+self-update, the sync script and already-deployed hosts are unaffected; the
+script resolves its real path (`readlink -f`) so it behaves the same through
+the link. It only auto-links from `~/start.sh` itself and never replaces an
+existing `start`. See `../../docs/plan/plan.md` ADR-7.
 
 When start.sh detects that something is **already multiplexing** — a herdr
 pane (`HERDR_ENV`) or an existing tmux client (`$TMUX`) — it skips tmux
@@ -180,9 +190,11 @@ unchanged: a new phonetic-alphabet tmux session, then attach. See
 `../../docs/plan/plan.md` ADR-2 and ADR-3.
 
 ```bash
-./start.sh                    # prompt (or claude if no TTY)
-./start.sh --agent codex      # explicit
-START_SH_AGENT=codex ./start.sh
+start                         # prompt (or claude if no TTY)
+start claude                  # explicit
+start codex
+start --agent codex           # same as `start codex`
+START_SH_AGENT=codex start
 ```
 
 ## Recovery

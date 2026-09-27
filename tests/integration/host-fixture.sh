@@ -1,0 +1,334 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Prepare a disposable Debian container for bootstrap integration tests. The
+# bootstrap is intentionally run unchanged except for its /dev/tty input
+# redirect (the test runner supplies stdin instead). Commands whose real
+# implementations would mutate the container host kernel, require a systemd
+# PID 1, or contact a real account are small deterministic doubles.
+
+BOOTSTRAP_SOURCE=${1:?usage: host-fixture.sh /path/to/bootstrap.sh}
+ROOT=/var/lib/bootstrap-test
+KEYS="$ROOT/keys"
+SHIM_DIR=/usr/local/lib/bootstrap-test
+
+mkdir -p "$ROOT" "$KEYS" "$SHIM_DIR" /test
+cp "$(dirname "$BOOTSTRAP_SOURCE")/keys/jedarden.pub" "$KEYS/jedarden.pub"
+cp "$(dirname "$BOOTSTRAP_SOURCE")/keys/jeda-mbp.pub" "$KEYS/jeda-mbp.pub"
+
+# The production script requires these system groups and directories before
+# it reaches the package/service setup steps. The package manager is a no-op
+# in this fixture because the test doubles below provide the package entry
+# points that are observed by the bootstrap.
+groupadd --system sudo 2>/dev/null || true
+mkdir -p \
+    /etc/apt/apt.conf.d \
+    /etc/ssh/sshd_config.d \
+    /etc/fail2ban \
+    /etc/audit/rules.d \
+    /etc/sysctl.d \
+    /etc/ufw \
+    /etc/modprobe.d \
+    /etc/logrotate.d \
+    /etc/cron.d \
+    /etc/cron.daily \
+    /etc/cron.hourly \
+    /etc/cron.monthly \
+    /etc/cron.weekly
+touch /etc/ssh/sshd_config
+# Docker manages /etc/hosts as a special mount that cannot be atomically
+# replaced with sed -i. Preseed the exact documented hostname mapping so the
+# production script exercises its already-configured branch.
+grep -Fq '127.0.1.1	bootstrap-test' /etc/hosts ||
+    printf '127.0.1.1\tbootstrap-test\n' >> /etc/hosts
+
+cat > "$SHIM_DIR/command-shim" <<'SHIM'
+#!/usr/bin/env bash
+set -euo pipefail
+
+name=$(basename "$0")
+state=/var/lib/bootstrap-test
+log="$state/commands.log"
+mkdir -p "$state"
+printf '%s %q\n' "$name" "$*" >> "$log"
+
+case "$name" in
+    apt-get)
+        # Package presence is represented by the command doubles installed by
+        # this fixture. Keeping apt a no-op makes the test quick and offline.
+        exit 0
+        ;;
+    curl)
+        url="${!#}"
+        case "$url" in
+            https://raw.githubusercontent.com/jedarden/bootstrap/main/hosts/ex44/keys/*)
+                key_name=${url##*/}
+                [[ -f "$state/keys/$key_name" ]] || exit 22
+                cat "$state/keys/$key_name"
+                ;;
+            https://tailscale.com/install.sh)
+                cat <<'TAILSCALE_INSTALL'
+mkdir -p /usr/local/bin
+cat > /usr/local/bin/tailscale <<'TAILSCALE'
+#!/usr/bin/env bash
+set -euo pipefail
+state=/var/lib/bootstrap-test/tailscale-connected
+case "${1:-}" in
+    status)
+        if [[ -f "$state" ]]; then
+            if [[ "${2:-}" == "--json" ]]; then
+                echo '{"Self":{"DNSName":"bootstrap-test.tailnet.ts.net."}}'
+            else
+                echo '100.64.0.10  bootstrap-test  linux   active; direct'
+            fi
+            exit 0
+        fi
+        echo 'Logged out.' >&2
+        exit 1
+        ;;
+    up)
+        touch "$state"
+        exit 0
+        ;;
+    *)
+        exit 0
+        ;;
+esac
+TAILSCALE
+chmod +x /usr/local/bin/tailscale
+TAILSCALE_INSTALL
+                ;;
+            https://claude.ai/install.sh)
+                cat <<'CLAUDE_INSTALL'
+mkdir -p "$HOME/.local/bin"
+cat > "$HOME/.local/bin/claude" <<'CLAUDE'
+#!/usr/bin/env bash
+echo 'claude 1.0.0'
+CLAUDE
+chmod +x "$HOME/.local/bin/claude"
+CLAUDE_INSTALL
+                ;;
+            *)
+                echo "unexpected curl URL in bootstrap fixture: $url" >&2
+                exit 22
+                ;;
+        esac
+        ;;
+    timedatectl)
+        case "${1:-}" in
+            show)
+                if [[ " $* " == *'--property=Timezone'* ]]; then
+                    echo 'America/New_York'
+                elif [[ " $* " == *'--property=NTP'* ]]; then
+                    echo 'yes'
+                fi
+                ;;
+            set-timezone|set-ntp)
+                ;;
+        esac
+        ;;
+    hostnamectl|loginctl|reboot)
+        exit 0
+        ;;
+    systemctl)
+        case "${1:-}" in
+            is-active)
+                unit="${3:-${2:-}}"
+                if [[ "$unit" == tailscale && -f "$state/tailscale-connected" ]]; then
+                    exit 0
+                fi
+                exit 1
+                ;;
+            list-unit-files)
+                # Make the optional systemd-resolved branch a no-op. DNS is
+                # provided by the container runtime in this test.
+                exit 1
+                ;;
+            *)
+                exit 0
+                ;;
+        esac
+        ;;
+    resolvectl)
+        echo 'DNS Servers: 1.1.1.1'
+        ;;
+    getent)
+        if [[ "${1:-}" == hosts ]]; then
+            echo "192.0.2.10 ${2:-bootstrap-test}"
+            exit 0
+        fi
+        exec /usr/bin/getent "$@"
+        ;;
+    locale)
+        echo 'C'
+        echo 'en_US.utf8'
+        ;;
+    ping)
+        exit 0
+        ;;
+    sysctl)
+        case "${1:-}" in
+            --system)
+                echo '* Applying /etc/sysctl.d/99-hardening.conf'
+                ;;
+            -n)
+                case "${2:-}" in
+                    net.ipv4.conf.all.rp_filter|net.ipv4.tcp_syncookies) echo 1 ;;
+                    kernel.randomize_va_space) echo 2 ;;
+                    *) echo 0 ;;
+                esac
+                ;;
+        esac
+        ;;
+    ufw)
+        rules="$state/ufw.rules"
+        mkdir -p "$state"
+        case "${1:-}" in
+            --force)
+                if [[ "${2:-}" == reset ]]; then
+                    : > "$rules"
+                fi
+                ;;
+            default)
+                echo "Default: ${2:-} ${3:-}" >> "$rules"
+                ;;
+            allow)
+                echo "ALLOW IN on ${3:-any} $*" >> "$rules"
+                ;;
+            status)
+                echo 'Status: active'
+                cat "$rules"
+                ;;
+        esac
+        ;;
+    sshd)
+        if [[ "${1:-}" == -t ]]; then
+            exit 0
+        fi
+        if [[ "${1:-}" == -T ]]; then
+            cat <<'SSHD'
+permitrootlogin prohibit-password
+passwordauthentication no
+pubkeyauthentication yes
+maxauthtries 3
+SSHD
+        fi
+        ;;
+    fail2ban-client)
+        if [[ "${1:-}" == status ]]; then
+            echo 'Status for the jail: sshd'
+            echo '| Currently failed: 0'
+        fi
+        ;;
+    auditctl)
+        if [[ "${1:-}" == -l ]]; then
+            echo '-w /etc/sudoers -p wa -k sudoers'
+            echo '-w /etc/passwd -p wa -k identity'
+        fi
+        ;;
+    jq)
+        echo 'bootstrap-test.tailnet.ts.net'
+        ;;
+    docker)
+        case "${1:-}" in
+            info) echo 'Rootless Docker fixture';;
+            run) echo 'Hello from Docker';;
+        esac
+        ;;
+    dockerd-rootless-setuptool.sh)
+        mkdir -p "$HOME/.config/systemd/user"
+        cat > "$HOME/.config/systemd/user/docker.service" <<'DOCKER_SERVICE'
+[Unit]
+Description=Rootless Docker fixture
+DOCKER_SERVICE
+        ;;
+    restic)
+        repository="$state/restic-repository-created"
+        case "${1:-}" in
+            snapshots)
+                if [[ -f "$repository" ]]; then
+                    echo 'abcdef0123456789'
+                    exit 0
+                fi
+                exit 1
+                ;;
+            init|backup)
+                touch "$repository"
+                if [[ "${1:-}" == backup ]]; then
+                    echo 'backup complete'
+                fi
+                ;;
+            check|restore)
+                ;;
+            *)
+                echo "unexpected restic operation in bootstrap fixture: ${1:-}" >&2
+                exit 1
+                ;;
+        esac
+        ;;
+    yq|kubectl|gh)
+        [[ "$name" != kubectl || "${1:-}" != version ]] || echo 'Client Version: v1.29.6'
+        ;;
+    *)
+        echo "unexpected command shim invocation: $name" >&2
+        exit 127
+        ;;
+esac
+SHIM
+chmod +x "$SHIM_DIR/command-shim"
+
+for command in apt-get curl timedatectl hostnamectl loginctl systemctl resolvectl \
+    getent locale ping sysctl ufw sshd fail2ban-client auditctl jq docker \
+    dockerd-rootless-setuptool.sh restic yq kubectl gh; do
+    ln -sf "$SHIM_DIR/command-shim" "/usr/local/bin/$command"
+done
+
+# The test copy is the production script with only its terminal transport
+# adapted for docker exec -i. Assert that the adapter found the expected line
+# rather than silently testing a stale or different script.
+sed 's#exec 3</dev/tty#exec 3<\&0#' "$BOOTSTRAP_SOURCE" > /test/bootstrap-under-test.sh
+grep -Fq 'exec 3<&0' /test/bootstrap-under-test.sh
+chmod +x /test/bootstrap-under-test.sh
+
+cat > /usr/local/bin/bootstrap-test-snapshot <<'SNAPSHOT'
+#!/usr/bin/env bash
+set -euo pipefail
+
+hash_file() {
+    local path=$1
+    if [[ "$path" == /etc/bootstrap/config ]]; then
+        sed '/^# Bootstrap configuration - saved /d' "$path" | sha256sum | cut -d' ' -f1
+    else
+        sha256sum "$path" | cut -d' ' -f1
+    fi
+}
+
+for path in \
+    /etc/hosts \
+    /etc/fstab \
+    /etc/bootstrap/config \
+    /etc/ssh/sshd_config.d/hardening.conf \
+    /etc/sysctl.d/99-hardening.conf \
+    /etc/ufw/ufw.conf \
+    /etc/fail2ban/jail.local \
+    /etc/audit/rules.d/hardening.rules \
+    /etc/restic/b2.env \
+    /etc/cron.d/restic-backup \
+    /etc/logrotate.d/restic-backup \
+    /etc/subuid \
+    /etc/subgid \
+    /home/coding/.bashrc \
+    /home/coding/.tmux.conf \
+    /home/coding/start.sh \
+    /home/coding/.local/bin/start \
+    /home/coding/bin/start-docker \
+    /home/coding/.config/systemd/user/docker.service \
+    /var/lib/bootstrap-test/ufw.rules $\
+    /var/lib/bootstrap-test/restic-repository-created; do
+    [[ -e "$path" || -L "$path" ]] || continue
+    printf '%s %s\n' "$path" "$(hash_file "$path")"
+done
+SNAPSHOT
+chmod +x /usr/local/bin/bootstrap-test-snapshot
+
+echo 'bootstrap integration fixture ready'

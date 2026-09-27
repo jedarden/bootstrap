@@ -210,7 +210,19 @@ CLAUDE_INSTALL
 permitrootlogin prohibit-password
 passwordauthentication no
 pubkeyauthentication yes
+authenticationmethods publickey
 maxauthtries 3
+maxsessions 10
+logingracetime 20
+clientaliveinterval 300
+clientalivecountmax 2
+allowusers root coding trading
+x11forwarding no
+allowtcpforwarding yes
+allowagentforwarding no
+permittunnel no
+gatewayports no
+permituserenvironment no
 SSHD
         fi
         ;;
@@ -223,7 +235,16 @@ SSHD
     auditctl)
         if [[ "${1:-}" == -l ]]; then
             echo '-w /etc/sudoers -p wa -k sudoers'
+            echo '-w /etc/sudoers.d/ -p wa -k sudoers'
             echo '-w /etc/passwd -p wa -k identity'
+            echo '-w /etc/group -p wa -k identity'
+            echo '-w /etc/shadow -p wa -k identity'
+            echo '-w /etc/ssh/sshd_config -p wa -k sshd'
+            echo '-w /etc/ssh/sshd_config.d/ -p wa -k sshd'
+            echo '-w /etc/crontab -p wa -k cron'
+            echo '-w /etc/cron.d/ -p wa -k cron'
+            echo '-w /etc/hosts -p wa -k hosts'
+            echo '-w /etc/network/ -p wa -k network'
         fi
         ;;
     jq)
@@ -231,11 +252,21 @@ SSHD
         ;;
     docker)
         case "${1:-}" in
-            info) echo 'Rootless Docker fixture';;
+            info)
+                [[ $EUID -ne 0 ]] || {
+                    echo 'rootless Docker must not be queried as root' >&2
+                    exit 1
+                }
+                echo 'Rootless Docker fixture'
+                ;;
             run) echo 'Hello from Docker';;
         esac
         ;;
     dockerd-rootless-setuptool.sh)
+        [[ $EUID -ne 0 ]] || {
+            echo 'rootless Docker setup must not run as root' >&2
+            exit 1
+        }
         mkdir -p "$HOME/.config/systemd/user"
         cat > "$HOME/.config/systemd/user/docker.service" <<'DOCKER_SERVICE'
 [Unit]
@@ -381,6 +412,12 @@ for path in \
     /home/coding/.local/bin/start \
     /home/coding/bin/start-docker \
     /home/coding/.config/systemd/user/docker.service \
+    /home/trading/.bashrc \
+    /home/trading/.tmux.conf \
+    /home/trading/start.sh \
+    /home/trading/.local/bin/start \
+    /home/trading/bin/start-docker \
+    /home/trading/.config/systemd/user/docker.service \
     /var/lib/bootstrap-test/ufw.rules $\
     /var/lib/bootstrap-test/restic-repository-created; do
     [[ -e "$path" || -L "$path" ]] || continue

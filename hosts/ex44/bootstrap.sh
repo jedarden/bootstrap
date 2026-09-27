@@ -949,6 +949,10 @@ MACs hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com
 KexAlgorithms curve25519-sha256,curve25519-sha256@libssh.org
 SSHCONF
 
+# Keep the effective SSH policy immutable to unprivileged users even when the
+# invoking environment has a permissive umask.
+chmod 644 /etc/ssh/sshd_config.d/hardening.conf
+
 # Test SSH config before applying
 sshd -t || {
     echo "ERROR: SSH config invalid"

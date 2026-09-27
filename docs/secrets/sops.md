@@ -210,13 +210,14 @@ sops exec-env secrets/bootstrap/ex44.sops.env \
   'exec bash hosts/ex44/bootstrap.sh'
 ```
 
-For a fresh host, the same process-environment contract works with the raw
-bootstrap stream:
+For a fresh host, first download and authenticate the immutable bootstrap
+archive and manifest using the [artifact authentication runbook](../../README.md#artifact-authentication).
+Then the same process-environment contract works with the verified file:
 
 ```bash
+bootstrap_path=/root/bootstrap-1.3.1.sh
 sops exec-env secrets/bootstrap/ex44.sops.env \
-  'exec bash -s' < <(curl -fsSL \
-    https://raw.githubusercontent.com/jedarden/bootstrap/main/hosts/ex44/bootstrap.sh)
+  "exec bash $bootstrap_path"
 ```
 
 The operator's age private key and the SOPS ciphertext stay on the operator

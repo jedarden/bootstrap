@@ -12,6 +12,7 @@ FORGEJO_BARE="$TMP/forgejo.git"
 GITHUB_BARE="$TMP/github.git"
 GITHUB_RAW="$TMP/github-raw"
 KNOWN_GOOD_START="$TMP/known-good-start.sh"
+TEST_SIGNING_DIR="$TMP/signing"
 trap 'rm -rf "$TMP"' EXIT
 
 fail() {
@@ -45,6 +46,12 @@ assert_release() {
 }
 
 mkdir -p "$FIXTURE/scripts" "$FIXTURE/hosts/ex44"
+mkdir -p "$FIXTURE/hosts/ex44/keys" "$TEST_SIGNING_DIR"
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 \
+    -out "$TEST_SIGNING_DIR/private.pem" 2>/dev/null
+openssl pkey -in "$TEST_SIGNING_DIR/private.pem" -pubout \
+    -out "$TEST_SIGNING_DIR/public.pem" 2>/dev/null
+export ARTIFACT_SIGNING_KEY="$TEST_SIGNING_DIR/private.pem"
 cp -p "$ROOT/README.md" "$FIXTURE/"
 cp -p \
     "$ROOT/scripts/check-host-parity.sh" \
@@ -58,6 +65,30 @@ cp -p \
     "$ROOT/hosts/ex44/start.sh.version" \
     "$ROOT/hosts/ex44/sync-start-sh.sh" \
     "$FIXTURE/hosts/ex44/"
+cp -p "$ROOT/hosts/ex44/keys/"*.pub "$FIXTURE/hosts/ex44/keys/"
+cp -p "$TEST_SIGNING_DIR/public.pem" \
+    "$FIXTURE/hosts/ex44/keys/bootstrap-artifacts-signing.pub"
+
+python3 - "$FIXTURE/hosts/ex44/start.sh" \
+    "$FIXTURE/hosts/ex44/bootstrap.sh" "$TEST_SIGNING_DIR/public.pem" <<'PY'
+import pathlib
+import sys
+
+public_key = pathlib.Path(sys.argv[3]).read_text()
+begin = "ARTIFACT_TRUSTED_PUBLIC_KEY=$(cat <<'ARTIFACT_KEY'\n"
+end = "ARTIFACT_KEY\n)"
+replacement = begin + public_key + end
+for filename in sys.argv[1:3]:
+    path = pathlib.Path(filename)
+    text = path.read_text()
+    start = text.index(begin)
+    finish = text.index(end, start) + len(end)
+    path.write_text(text[:start] + replacement + text[finish:])
+PY
+
+(cd "$FIXTURE/hosts/ex44" && ./sync-start-sh.sh >/dev/null)
+cp -p "$FIXTURE/hosts/ex44/bootstrap.sh" "$FIXTURE/hosts/ex44/bootstrap-1.3.1.sh"
+(cd "$FIXTURE" && scripts/start-sh-release.sh manifest 1.3.1 >/dev/null)
 
 git -C "$FIXTURE" init -q -b main
 git -C "$FIXTURE" config user.name release-test
@@ -86,8 +117,12 @@ printf '%s\n' \
     '    [[ "$ref" == refs/heads/main ]] || continue' \
     '    git -C "$FIXTURE" push -q "$GITHUB_BARE" "$newrev:refs/heads/main"' \
     '    version=$(git --git-dir="$GITHUB_BARE" show "$newrev:hosts/ex44/start.sh.version")' \
-    '    for filename in bootstrap.sh start.sh start.sh.version "bootstrap-$version.sh"; do' \
+    '    for filename in bootstrap.sh start.sh start.sh.version artifact-manifest.txt artifact-manifest.sig "bootstrap-$version.sh"; do' \
     '        git --git-dir="$GITHUB_BARE" show "$newrev:hosts/ex44/$filename" > "$GITHUB_RAW/$filename"' \
+    '    done' \
+    '    mkdir -p "$GITHUB_RAW/keys"' \
+    '    for filename in jedarden.pub jeda-mbp.pub bootstrap-artifacts-signing.pub; do' \
+    '        git --git-dir="$GITHUB_BARE" show "$newrev:hosts/ex44/keys/$filename" > "$GITHUB_RAW/keys/$filename"' \
     '    done' \
     'done' > "$FORGEJO_BARE/hooks/post-receive"
 chmod +x "$FORGEJO_BARE/hooks/post-receive"

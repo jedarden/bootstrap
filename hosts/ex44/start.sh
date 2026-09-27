@@ -24,6 +24,25 @@
 # embedded copy both went undetected in the wild before this rule existed).
 START_SH_VERSION="1.3.1"
 REPO_URL="https://raw.githubusercontent.com/jedarden/bootstrap/main/hosts/ex44"
+ARTIFACT_MANIFEST_FILE="artifact-manifest.txt"
+ARTIFACT_SIGNATURE_FILE="artifact-manifest.sig"
+ARTIFACT_TRUSTED_KEY_ID="bootstrap-rsa-2026-09"
+ARTIFACT_TRUSTED_PUBLIC_KEY=$(cat <<'ARTIFACT_KEY'
+-----BEGIN PUBLIC KEY-----
+MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAwPr9OxItnuDaKqI217+F
+MwfFegnkYy38n2GbZhQ3x9ipK+HtrV8qnCFGt4V0Kxwn+gmKrIt+RmAGyfyz2pyo
+fDd6N+bEfJb4gCCrNa4Am32fYKK6lCq4JCB9l5V8n+eLvyZnBQd3sRy06RpdD0YY
+Jr0C/DdJaGvIYs51XCRdTBqf/YCvbQuW2eXlAuFEc2dB0dO3C9G7na+JK/3AXeUH
+E83z52EBOIW1uuDMMX4oAu5bEmjdU4VjcqqU2+WqHBZJJrOb8COuEpEW+yURf4Ze
+5sSLPLIfqP+npOyeNBraMheHIZnFs3PwrYMyCfmuRdr8WUiPJcr8anapfOL5XoOp
+NdpuRrcP0t2i5WWCojaCNUZd3TasXtwO+WuoYVPqHTJVd6ISACaZG6i1t3d9igYS
+jZpB3JGdOIgwoj02h0wGvXqDj/O2R/lWQIPNrdgy6ROwcvbyzXzj1sYh6fW6Lr+c
+/5mOK+PTN3Pt9MrB+6/c4G3hIDtK+29TpZEVEhxbaeMJAgMBAAE=
+-----END PUBLIC KEY-----
+ARTIFACT_KEY
+)
+ARTIFACT_TRUSTED_KEY_IDS=("$ARTIFACT_TRUSTED_KEY_ID")
+ARTIFACT_TRUSTED_PUBLIC_KEYS=("$ARTIFACT_TRUSTED_PUBLIC_KEY")
 
 usage() {
     cat <<'USAGE'
@@ -116,22 +135,82 @@ TMUX_DIR="$SCRIPT_DIR/.tmux"
 TMUX_CONF="$TMUX_DIR/tmux.conf"
 TPM_DIR="$TMUX_DIR/plugins/tpm"
 
+# Verify a signed release manifest fetched from the raw distribution path.
+# The public key is embedded in this launcher so a compromised or stale raw
+# response cannot choose a new verification key. A future key rotation must
+# ship a transition launcher that trusts both the old and new key while the
+# manifest remains signed by the old key.
+verify_artifact_manifest() {
+    local directory=$1 manifest="$1/$ARTIFACT_MANIFEST_FILE"
+    local signature="$1/$ARTIFACT_SIGNATURE_FILE" public_key="$1/public-key.pem"
+    local key_id signature_key_id signature_value manifest_version trusted_public_key
+
+    command -v openssl >/dev/null 2>&1 || return 1
+    command -v base64 >/dev/null 2>&1 || return 1
+    command -v sha256sum >/dev/null 2>&1 || return 1
+    curl -sfL "$REPO_URL/$ARTIFACT_MANIFEST_FILE" > "$manifest" 2>/dev/null || return 1
+    curl -sfL "$REPO_URL/$ARTIFACT_SIGNATURE_FILE" > "$signature" 2>/dev/null || return 1
+    mapfile -t key_ids < <(grep -E '^key_id=[A-Za-z0-9._-]+$' "$manifest" || true)
+    [[ ${#key_ids[@]} -eq 1 ]] || return 1
+    key_id=${key_ids[0]#key_id=}
+    trusted_public_key=""
+    for key_index in "${!ARTIFACT_TRUSTED_KEY_IDS[@]}"; do
+        if [[ "$key_id" == "${ARTIFACT_TRUSTED_KEY_IDS[$key_index]}" ]]; then
+            trusted_public_key="${ARTIFACT_TRUSTED_PUBLIC_KEYS[$key_index]}"
+            break
+        fi
+    done
+    [[ -n "$trusted_public_key" ]] || return 1
+    printf '%s\n' "$trusted_public_key" > "$public_key"
+
+    mapfile -t signature_ids < <(grep -E '^key_id=[A-Za-z0-9._-]+$' "$signature" || true)
+    [[ ${#signature_ids[@]} -eq 1 ]] || return 1
+    signature_key_id=${signature_ids[0]#key_id=}
+    [[ "$signature_key_id" == "$key_id" ]] || return 1
+    mapfile -t signatures < <(grep -E '^signature=[A-Za-z0-9+/]+=*$' "$signature" || true)
+    [[ ${#signatures[@]} -eq 1 ]] || return 1
+    signature_value=${signatures[0]#signature=}
+    printf '%s' "$signature_value" | base64 --decode > "$directory/signature.bin" 2>/dev/null || return 1
+    openssl dgst -sha256 -verify "$public_key" -signature "$directory/signature.bin" "$manifest" >/dev/null 2>&1 || return 1
+
+    mapfile -t manifest_versions < <(grep -E '^version=[0-9]+\.[0-9]+\.[0-9]+$' "$manifest" || true)
+    [[ ${#manifest_versions[@]} -eq 1 ]] || return 1
+    manifest_version=${manifest_versions[0]#version=}
+    printf '%s\n' "$manifest_version"
+}
+
+manifest_artifact_hash() {
+    local manifest=$1 artifact=$2
+    mapfile -t hashes < <(grep -E "^artifact=${artifact//./\.} [0-9a-f]{64}$" "$manifest" || true)
+    [[ ${#hashes[@]} -eq 1 ]] || return 1
+    printf '%s\n' "${hashes[0]##* }"
+}
+
+verify_artifact_file() {
+    local manifest=$1 artifact=$2 path=$3 expected actual payload_version
+    expected=$(manifest_artifact_hash "$manifest" "$artifact") || return 1
+    actual=$(sha256sum "$path" | awk '{print $1}') || return 1
+    [[ "$actual" == "$expected" ]] || return 1
+    if [[ "$artifact" == "start.sh" ]]; then
+        mapfile -t payload_versions < <(grep -E '^START_SH_VERSION="[0-9]+\.[0-9]+\.[0-9]+"$' "$path" || true)
+        [[ ${#payload_versions[@]} -eq 1 ]] || return 1
+        payload_version=${payload_versions[0]#START_SH_VERSION=\"}
+        payload_version=${payload_version%\"}
+        [[ "$payload_version" == "$(grep -E '^version=' "$manifest" | cut -d= -f2)" ]] || return 1
+    fi
+}
+
 # Self-update function
 check_for_self_update() {
     if $SKIP_UPDATE; then
         return 0
     fi
 
-    local remote_version
-    remote_version=$(curl -sfL "$REPO_URL/start.sh.version" 2>/dev/null || echo "")
-
-    if [[ -z "$remote_version" ]]; then
-        return 0  # Can't check, continue anyway
-    fi
-
-    # Ignore malformed release markers. A non-version string must never make
-    # the launcher consider an arbitrary payload eligible for installation.
-    if [[ ! "$remote_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    local manifest_dir remote_version new_script
+    manifest_dir=$(mktemp -d "${SELF_PATH}.manifest.XXXXXX") || return 0
+    if ! remote_version=$(verify_artifact_manifest "$manifest_dir"); then
+        echo "Warning: release manifest verification failed; keeping current start.sh $START_SH_VERSION" >&2
+        rm -rf "$manifest_dir"
         return 0
     fi
 
@@ -141,9 +220,9 @@ check_for_self_update() {
         lowest=$(printf '%s\n%s' "$START_SH_VERSION" "$remote_version" | sort -V | head -n1)
         if [[ "$START_SH_VERSION" == "$lowest" && "$START_SH_VERSION" != "$remote_version" ]]; then
             echo "Updating start.sh: $START_SH_VERSION -> $remote_version"
-            local new_script
             new_script=$(mktemp "${SELF_PATH}.tmp.XXXXXX") || {
                 echo "Warning: could not create a temporary start.sh update, keeping current version $START_SH_VERSION" >&2
+                rm -rf "$manifest_dir"
                 return 0
             }
 
@@ -152,28 +231,35 @@ check_for_self_update() {
             # remote response directly into the working launcher.
             if ! curl -sfL "$REPO_URL/start.sh" > "$new_script" 2>/dev/null; then
                 rm -f "$new_script"
+                rm -rf "$manifest_dir"
                 return 0
             fi
 
-            # Guard against installing a broken or empty payload (e.g. a
-            # login page, truncated fetch, or corrupted commit) - verify it
-            # parses as valid bash before overwriting the working script.
-            if [[ ! -s "$new_script" ]] || ! bash -n "$new_script" 2>/dev/null; then
-                echo "Warning: fetched start.sh failed syntax check, keeping current version $START_SH_VERSION"
+            # Require the signed manifest hash and the payload's own version
+            # before the syntax gate. Never install a valid-but-stale script
+            # or a payload from a different release.
+            if ! verify_artifact_file "$manifest_dir/$ARTIFACT_MANIFEST_FILE" "start.sh" "$new_script" ||
+                [[ ! -s "$new_script" ]] || ! bash -n "$new_script" 2>/dev/null; then
+                echo "Warning: fetched start.sh failed authenticity, integrity, or syntax checks; keeping current version $START_SH_VERSION" >&2
                 rm -f "$new_script"
+                rm -rf "$manifest_dir"
                 return 0
             fi
 
             if ! chmod +x "$new_script" || ! mv -f "$new_script" "$SELF_PATH"; then
                 echo "Warning: could not install fetched start.sh, keeping current version $START_SH_VERSION" >&2
                 rm -f "$new_script"
+                rm -rf "$manifest_dir"
                 return 0
             fi
 
+            rm -rf "$manifest_dir"
             echo "Updated! Restarting..."
             exec "$SELF_PATH" --no-update ${ORIGINAL_ARGS[@]+"${ORIGINAL_ARGS[@]}"}
         fi
     fi
+
+    rm -rf "$manifest_dir"
 }
 
 check_for_self_update

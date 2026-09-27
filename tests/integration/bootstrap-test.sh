@@ -71,6 +71,16 @@ docker run --detach \
 docker exec "$CONTAINER" bash /src/tests/integration/host-fixture.sh \
     /src/hosts/ex44/bootstrap.sh
 
+# The fixture intentionally makes apt-get a no-op. A real Debian/Ubuntu host
+# installs OpenSSL in bootstrap's core package step, but a minimal test image
+# may not have it before that no-op. Skip this integration path rather than
+# weakening the production signature check or mutating the fixture into a
+# different artifact.
+if ! docker exec "$CONTAINER" bash -ceu 'command -v openssl >/dev/null 2>&1'; then
+    echo 'SKIP: bootstrap integration fixture lacks openssl for signed-artifact verification' >&2
+    exit 0
+fi
+
 first_input="$TMP/first-input"
 tailscale_auth_key='tskey-auth-integration'
 cat > "$first_input" <<'INPUT'
@@ -93,14 +103,18 @@ run_bootstrap() {
     local output="$TMP/$label-output"
     shift 2
 
-    local docker_args=(exec -i)
+    # Run through a disposable pty so the production bootstrap can open
+    # /dev/tty without rewriting the signed fixture under test.
+    local docker_args=(exec -it)
+    local command_line
     if [[ $# -gt 0 ]]; then
         docker_args+=(--env-file "$1")
     fi
     docker_args+=("$CONTAINER" bash /test/bootstrap-under-test.sh)
+    printf -v command_line '%q ' docker "${docker_args[@]}"
 
     echo "Running bootstrap ($label)..."
-    if ! docker "${docker_args[@]}" \
+    if ! script -qefc "$command_line" /dev/null \
         < "$input" > "$output" 2>&1; then
         echo "bootstrap failed during $label; output follows:" >&2
         cat "$output" >&2
@@ -187,8 +201,8 @@ run_bootstrap_expect_failure() {
     local output="$TMP/$label-output"
 
     echo "Running bootstrap ($label), expecting failure..."
-    if docker exec -i -e "$environment" \
-        "$CONTAINER" bash /test/bootstrap-under-test.sh \
+    if script -qefc "$(printf '%q ' docker exec -it -e "$environment" \
+        "$CONTAINER" bash /test/bootstrap-under-test.sh)" /dev/null \
         < "$input" > "$output" 2>&1; then
         echo "ASSERTION FAILED: bootstrap unexpectedly succeeded during $label" >&2
         cat "$output" >&2
@@ -200,8 +214,8 @@ run_bootstrap_expect_failure() {
 partial_sops_output="$TMP/partial-sops-output"
 partial_sops_env="$TMP/partial-sops.env"
 write_private_env "$partial_sops_env" "BOOTSTRAP_B2_APPLICATION_KEY=$sops_b2_key"
-if docker exec -i --env-file "$partial_sops_env" \
-    "$CONTAINER" bash /test/bootstrap-under-test.sh \
+if script -qefc "$(printf '%q ' docker exec -it --env-file "$partial_sops_env" \
+    "$CONTAINER" bash /test/bootstrap-under-test.sh)" /dev/null \
     </dev/null > "$partial_sops_output" 2>&1; then
     echo 'ASSERTION FAILED: bootstrap accepted a partial SOPS secret pair' >&2
     exit 1

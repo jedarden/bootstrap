@@ -15,6 +15,10 @@ SHIM_DIR=/usr/local/lib/bootstrap-test
 mkdir -p "$ROOT" "$KEYS" "$SHIM_DIR" /test /var/lib/tailscale
 cp "$(dirname "$BOOTSTRAP_SOURCE")/keys/jedarden.pub" "$KEYS/jedarden.pub"
 cp "$(dirname "$BOOTSTRAP_SOURCE")/keys/jeda-mbp.pub" "$KEYS/jeda-mbp.pub"
+cp "$(dirname "$BOOTSTRAP_SOURCE")/artifact-manifest.txt" "$ROOT/artifact-manifest.txt"
+cp "$(dirname "$BOOTSTRAP_SOURCE")/artifact-manifest.sig" "$ROOT/artifact-manifest.sig"
+cp "$(dirname "$BOOTSTRAP_SOURCE")/keys/bootstrap-artifacts-signing.pub" \
+    "$KEYS/bootstrap-artifacts-signing.pub"
 
 # The production script requires these system groups and directories before
 # it reaches the package/service setup steps. The package manager is a no-op
@@ -68,6 +72,12 @@ case "$name" in
         done
         url="${url:-${!#}}"
         case "$url" in
+            https://raw.githubusercontent.com/jedarden/bootstrap/main/hosts/ex44/artifact-manifest.txt)
+                cat "$state/artifact-manifest.txt"
+                ;;
+            https://raw.githubusercontent.com/jedarden/bootstrap/main/hosts/ex44/artifact-manifest.sig)
+                cat "$state/artifact-manifest.sig"
+                ;;
             https://raw.githubusercontent.com/jedarden/bootstrap/main/hosts/ex44/keys/*)
                 key_name=${url##*/}
                 [[ -f "$state/keys/$key_name" ]] || exit 22
@@ -534,11 +544,12 @@ for command in apt-get curl timedatectl hostnamectl loginctl systemctl resolvect
     ln -sf "$SHIM_DIR/command-shim" "/usr/local/bin/$command"
 done
 
-# The test copy is the production script with only its terminal transport
-# adapted for docker exec -i. Assert that the adapter found the expected line
-# rather than silently testing a stale or different script.
-sed 's#exec 3</dev/tty#exec 3<\&0#' "$BOOTSTRAP_SOURCE" > /test/bootstrap-under-test.sh
-grep -Fq 'exec 3<&0' /test/bootstrap-under-test.sh
+# The test copy is the production script without transformations: the
+# integration runner allocates a pty so the signed bootstrap digest remains
+# valid. Assert that the expected terminal line is present rather than
+# silently testing a stale or different script.
+cp "$BOOTSTRAP_SOURCE" /test/bootstrap-under-test.sh
+grep -Fq 'exec 3</dev/tty' /test/bootstrap-under-test.sh
 chmod +x /test/bootstrap-under-test.sh
 
 cat > /usr/local/bin/bootstrap-test-snapshot <<'SNAPSHOT'

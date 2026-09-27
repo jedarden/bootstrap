@@ -15,6 +15,9 @@ START_SH="$HOST_DIR/start.sh"
 BOOTSTRAP_SH="$HOST_DIR/bootstrap.sh"
 VERSION_FILE="$HOST_DIR/start.sh.version"
 SYNC_SH="$HOST_DIR/sync-start-sh.sh"
+MANIFEST_FILE="$HOST_DIR/artifact-manifest.txt"
+SIGNATURE_FILE="$HOST_DIR/artifact-manifest.sig"
+SIGNING_PUBLIC_KEY="$HOST_DIR/keys/bootstrap-artifacts-signing.pub"
 START_REL="hosts/ex44/start.sh"
 FORGEJO_REMOTE="${FORGEJO_REMOTE:-origin}"
 GITHUB_REPO_URL="${GITHUB_REPO_URL:-https://github.com/jedarden/bootstrap.git}"
@@ -27,6 +30,11 @@ readonly DISTRIBUTION_ARTIFACTS=(
     'hosts/ex44/bootstrap.sh|bootstrap.sh'
     'hosts/ex44/start.sh|start.sh'
     'hosts/ex44/start.sh.version|start.sh.version'
+    'hosts/ex44/artifact-manifest.txt|artifact-manifest.txt'
+    'hosts/ex44/artifact-manifest.sig|artifact-manifest.sig'
+    'hosts/ex44/keys/jedarden.pub|keys/jedarden.pub'
+    'hosts/ex44/keys/jeda-mbp.pub|keys/jeda-mbp.pub'
+    'hosts/ex44/keys/bootstrap-artifacts-signing.pub|keys/bootstrap-artifacts-signing.pub'
 )
 
 die() {
@@ -39,6 +47,7 @@ usage() {
 Usage:
   scripts/start-sh-release.sh release VERSION
   scripts/start-sh-release.sh rollback GIT-REF VERSION
+  scripts/start-sh-release.sh manifest VERSION
   scripts/start-sh-release.sh --check
   scripts/start-sh-release.sh distribution-check
   scripts/start-sh-release.sh publish
@@ -51,6 +60,8 @@ Commands:
                         Restore start.sh from GIT-REF, publish it under a new
                         forward version, regenerate bootstrap.sh, create its
                         archive, and check it.
+  manifest VERSION     Re-sign the manifest for already-prepared release
+                        artifacts. The signing key never belongs in Git.
   --check               Verify syntax, generated-copy equality, and that the
                         current archive contents and all release metadata agree.
   distribution-check    Verify Forgejo main is mirrored to GitHub and that
@@ -160,12 +171,123 @@ check_versions() {
     echo "Version agreement: start.sh=$standalone, bootstrap.sh=$bootstrap, start.sh.version=$advertised, archive=$standalone"
 }
 
+extract_artifact_key_id() {
+    local path=$1 line
+    mapfile -t lines < <(grep -E '^ARTIFACT_TRUSTED_KEY_ID="[A-Za-z0-9._-]+"$' "$path" || true)
+    [[ ${#lines[@]} -ge 1 ]] || die "$path must contain an ARTIFACT_TRUSTED_KEY_ID assignment"
+    for line in "${lines[@]}"; do
+        [[ "$line" == "${lines[0]}" ]] || die "$path contains disagreeing ARTIFACT_TRUSTED_KEY_ID assignments"
+    done
+    line=${lines[0]#ARTIFACT_TRUSTED_KEY_ID=\"}
+    printf '%s\n' "${line%\"}"
+}
+
+require_signing_key() {
+    local signing_key=${ARTIFACT_SIGNING_KEY:-}
+    [[ -n "$signing_key" && -f "$signing_key" ]] ||
+        die "ARTIFACT_SIGNING_KEY must point to the release signing key (kept outside Git)"
+    command -v openssl >/dev/null 2>&1 || die "openssl is required to sign the artifact manifest"
+    command -v base64 >/dev/null 2>&1 || die "base64 is required to sign the artifact manifest"
+}
+
+manifest_artifacts() {
+    printf '%s\n' \
+        'bootstrap.sh' \
+        'start.sh' \
+        'start.sh.version' \
+        'keys/jedarden.pub' \
+        'keys/jeda-mbp.pub' \
+        'keys/bootstrap-artifacts-signing.pub'
+    find "$HOST_DIR" -maxdepth 1 -type f -name 'bootstrap-*.sh' -printf '%f\n' | sort
+}
+
+write_artifact_manifest() {
+    local version=$1 signing_key=${ARTIFACT_SIGNING_KEY:-}
+    local key_id path digest manifest_tmp signature_tmp signature_value
+    local -a artifacts
+
+    require_signing_key
+    key_id=$(extract_artifact_key_id "$START_SH")
+    [[ "$(extract_artifact_key_id "$BOOTSTRAP_SH")" == "$key_id" ]] ||
+        die "bootstrap.sh and start.sh use different artifact signing key IDs"
+    mapfile -t artifacts < <(manifest_artifacts "$version")
+    manifest_tmp=$(mktemp "${TMPDIR:-/tmp}/artifact-manifest.XXXXXX")
+    signature_tmp=$(mktemp "${TMPDIR:-/tmp}/artifact-signature.XXXXXX")
+    {
+        printf '%s\n' 'format=bootstrap-artifact-manifest-v1'
+        printf 'key_id=%s\n' "$key_id"
+        printf 'version=%s\n' "$version"
+        for path in "${artifacts[@]}"; do
+            digest=$(sha256sum "$HOST_DIR/$path" | awk '{print $1}')
+            printf 'artifact=%s %s\n' "$path" "$digest"
+        done
+    } > "$manifest_tmp"
+    openssl dgst -sha256 -sign "$signing_key" -out "$signature_tmp" "$manifest_tmp" >/dev/null 2>&1 || {
+        rm -f "$manifest_tmp" "$signature_tmp"
+        die "could not sign the artifact manifest"
+    }
+    signature_value=$(base64 -w0 "$signature_tmp")
+    mv "$manifest_tmp" "$MANIFEST_FILE"
+    {
+        printf 'key_id=%s\n' "$key_id"
+        printf 'signature=%s\n' "$signature_value"
+    } > "$SIGNATURE_FILE"
+    rm -f "$signature_tmp"
+}
+
+check_artifact_manifest() {
+    local version=$1 key_id manifest_version signature_value
+    local path expected signature_tmp
+    local -a formats key_ids versions signature_ids signatures artifacts expected_artifacts
+
+    [[ -f "$MANIFEST_FILE" && -f "$SIGNATURE_FILE" && -f "$SIGNING_PUBLIC_KEY" ]] ||
+        die "signed artifact manifest files are missing"
+    command -v openssl >/dev/null 2>&1 || die "openssl is required to verify the artifact manifest"
+    command -v base64 >/dev/null 2>&1 || die "base64 is required to verify the artifact manifest"
+
+    mapfile -t formats < <(grep -E '^format=bootstrap-artifact-manifest-v1$' "$MANIFEST_FILE" || true)
+    mapfile -t key_ids < <(grep -E '^key_id=[A-Za-z0-9._-]+$' "$MANIFEST_FILE" || true)
+    mapfile -t versions < <(grep -E '^version=[0-9]+\.[0-9]+\.[0-9]+$' "$MANIFEST_FILE" || true)
+    [[ ${#formats[@]} -eq 1 && ${#key_ids[@]} -eq 1 && ${#versions[@]} -eq 1 ]] ||
+        die "artifact manifest metadata is malformed"
+    key_id=${key_ids[0]#key_id=}
+    manifest_version=${versions[0]#version=}
+    [[ "$manifest_version" == "$version" ]] ||
+        die "artifact manifest version $manifest_version disagrees with release version $version"
+    [[ "$key_id" == "$(extract_artifact_key_id "$START_SH")" ]] ||
+        die "artifact manifest key ID does not match start.sh"
+
+    mapfile -t signature_ids < <(grep -E '^key_id=[A-Za-z0-9._-]+$' "$SIGNATURE_FILE" || true)
+    mapfile -t signatures < <(grep -E '^signature=[A-Za-z0-9+/]+=*$' "$SIGNATURE_FILE" || true)
+    [[ ${#signature_ids[@]} -eq 1 && ${#signatures[@]} -eq 1 &&
+        "${signature_ids[0]#key_id=}" == "$key_id" ]] ||
+        die "artifact manifest signature metadata is malformed"
+    signature_value=${signatures[0]#signature=}
+    signature_tmp=$(mktemp "${TMPDIR:-/tmp}/artifact-signature-check.XXXXXX")
+    if ! printf '%s' "$signature_value" | base64 --decode > "$signature_tmp" 2>/dev/null ||
+        ! openssl dgst -sha256 -verify "$SIGNING_PUBLIC_KEY" -signature "$signature_tmp" "$MANIFEST_FILE" >/dev/null 2>&1; then
+        rm -f "$signature_tmp"
+        die "artifact manifest signature verification failed"
+    fi
+    rm -f "$signature_tmp"
+
+    mapfile -t artifacts < <(sed -n 's/^artifact=//p' "$MANIFEST_FILE" | sort)
+    mapfile -t expected_artifacts < <(manifest_artifacts "$version" | sort)
+    [[ ${#artifacts[@]} -eq ${#expected_artifacts[@]} ]] || die "artifact manifest has an unexpected artifact set"
+    for path in "${expected_artifacts[@]}"; do
+        expected=$(sha256sum "$HOST_DIR/$path" | awk '{print $1}')
+        grep -Fxq "${path} ${expected}" <(printf '%s\n' "${artifacts[@]}") ||
+            die "artifact manifest digest mismatch for $path"
+    done
+}
+
 check_release() {
     bash -n "$START_SH"
     bash -n "$BOOTSTRAP_SH"
     "$ROOT/scripts/check-secret-leakage.sh" --artifacts
     "$SYNC_SH" --check
     check_versions
+    check_artifact_manifest "$(read_advertised_version)"
     "$ROOT/scripts/check-host-parity.sh"
 }
 
@@ -189,14 +311,21 @@ fail_distribution() {
     die "$@"
 }
 
+distribution_tmp_file() {
+    local prefix=$1 filename=$2
+    filename=${filename//\//__}
+    printf '%s/%s-%s\n' "$DISTRIBUTION_TMP" "$prefix" "$filename"
+}
+
 raw_artifacts_match() {
     local tmp=$1 archive_filename=$2 spec filename
     local -a artifacts=("${DISTRIBUTION_ARTIFACTS[@]}" "hosts/ex44/$archive_filename|$archive_filename")
     for spec in "${artifacts[@]}"; do
         filename=${spec#*|}
+        mkdir -p "$(dirname "$(distribution_tmp_file actual "$filename")")"
         curl --fail --location --silent --show-error \
-            "$GITHUB_RAW_ROOT/$filename" > "$tmp/actual-$filename" 2>/dev/null || return 1
-        cmp -s "$tmp/expected-$filename" "$tmp/actual-$filename" || return 1
+            "$GITHUB_RAW_ROOT/$filename" > "$(distribution_tmp_file actual "$filename")" 2>/dev/null || return 1
+        cmp -s "$(distribution_tmp_file expected "$filename")" "$(distribution_tmp_file actual "$filename")" || return 1
     done
 }
 
@@ -210,7 +339,8 @@ verify_distribution() {
     expected_archive_filename="bootstrap-$expected_version.sh"
     git -C "$ROOT" diff-index --quiet HEAD -- \
         hosts/ex44/bootstrap.sh hosts/ex44/start.sh hosts/ex44/start.sh.version \
-        "hosts/ex44/$expected_archive_filename" ||
+        "hosts/ex44/$expected_archive_filename" hosts/ex44/artifact-manifest.txt \
+        hosts/ex44/artifact-manifest.sig ||
         die "release files have uncommitted changes; commit them before distribution-check"
 
     expected_commit=$(git -C "$ROOT" rev-parse HEAD) ||
@@ -230,7 +360,7 @@ verify_distribution() {
     for spec in "${artifacts[@]}"; do
         path=${spec%%|*}
         filename=${spec#*|}
-        if ! git -C "$ROOT" show "$expected_commit:$path" > "$DISTRIBUTION_TMP/expected-$filename"; then
+        if ! git -C "$ROOT" show "$expected_commit:$path" > "$(distribution_tmp_file expected "$filename")"; then
             fail_distribution "expected release commit $expected_commit does not contain $path"
         fi
     done
@@ -313,6 +443,7 @@ prepare_release() {
     # fails closed without leaving a partially prepared release.
     "$ROOT/scripts/check-secret-leakage.sh" --artifacts
     bash -n "$START_SH"
+    require_signing_key
     current=$(extract_start_version "$START_SH")
     require_forward_version "$current" "$next"
 
@@ -321,6 +452,7 @@ prepare_release() {
     write_bootstrap_version "$BOOTSTRAP_SH" "$next"
     "$SYNC_SH"
     create_bootstrap_archive "$next"
+    write_artifact_manifest "$next"
     check_release
     echo "Prepared start.sh release $next. Review the diff, then commit the release files."
 }
@@ -333,6 +465,7 @@ prepare_rollback() {
 
     current=$(extract_start_version "$START_SH")
     require_forward_version "$current" "$next"
+    require_signing_key
     candidate=$(mktemp "${TMPDIR:-/tmp}/start-sh-rollback.XXXXXX")
     git -C "$ROOT" show "$ref:$START_REL" > "$candidate"
     chmod +x "$candidate"
@@ -348,6 +481,7 @@ prepare_rollback() {
     write_bootstrap_version "$BOOTSTRAP_SH" "$next"
     "$SYNC_SH"
     create_bootstrap_archive "$next"
+    write_artifact_manifest "$next"
     check_release
     echo "Prepared rollback release $next. Review the diff, then commit the release files."
 }
@@ -362,7 +496,8 @@ publish_release() {
     git -C "$ROOT" ls-files --error-unmatch "hosts/ex44/$archive_filename" >/dev/null 2>&1 ||
         die "release archive is not tracked: hosts/ex44/$archive_filename"
     git -C "$ROOT" diff-index --quiet HEAD -- "$START_REL" hosts/ex44/bootstrap.sh hosts/ex44/start.sh.version \
-        "hosts/ex44/$archive_filename" ||
+        "hosts/ex44/$archive_filename" hosts/ex44/artifact-manifest.txt \
+        hosts/ex44/artifact-manifest.sig ||
         die "release files have uncommitted changes; commit them before publishing"
     git -C "$ROOT" push origin main
     [[ -z "$(git -C "$ROOT" rev-list origin/main..HEAD)" ]] ||
@@ -379,6 +514,12 @@ case "${1:-}" in
     rollback)
         [[ $# -eq 3 ]] || { usage >&2; exit 2; }
         prepare_rollback "$2" "$3"
+        ;;
+    manifest)
+        [[ $# -eq 2 ]] || { usage >&2; exit 2; }
+        require_version "$2"
+        write_artifact_manifest "$2"
+        check_release
         ;;
     --check)
         [[ $# -eq 1 ]] || { usage >&2; exit 2; }

@@ -20,8 +20,9 @@ usage() {
 Usage:
   scripts/check-host-parity.sh [--live|--staged] [--allow-split]
 
-Validate bootstrap.sh, start.sh, start.sh.version, and every versioned
-bootstrap archive in every immediate directory under hosts/. The root
+Validate bootstrap.sh, start.sh, start.sh.version, the signed artifact
+manifest, and every versioned bootstrap archive in every immediate directory
+under hosts/. The root
 README.md must link to every host directory, and every README host link must
 point to an existing host path.
 
@@ -183,7 +184,7 @@ host_manifest() {
     : > "$output"
     while IFS= read -r filename; do
         case "$filename" in
-            bootstrap.sh|start.sh|start.sh.version)
+            bootstrap.sh|start.sh|start.sh.version|artifact-manifest.txt|artifact-manifest.sig)
                 printf '%s\n' "$filename" >> "$output"
                 ;;
             bootstrap-*.sh)
@@ -195,10 +196,12 @@ host_manifest() {
     done < "$all_files"
     sort -o "$output" "$output"
 
-    for filename in bootstrap.sh start.sh start.sh.version; do
+    for filename in bootstrap.sh start.sh start.sh.version artifact-manifest.txt artifact-manifest.sig; do
         grep -Fxq "$filename" "$output" ||
             die "$directory/$filename is missing in the $SOURCE source"
     done
+    source_path_exists "$directory/keys/bootstrap-artifacts-signing.pub" ||
+        die "$directory/keys/bootstrap-artifacts-signing.pub is missing in the $SOURCE source"
     grep -Eq '^bootstrap-[0-9]+\.[0-9]+\.[0-9]+\.sh$' "$output" ||
         die "$directory has no versioned bootstrap archive"
 }
@@ -214,9 +217,14 @@ validate_host() {
     while IFS= read -r filename; do
         source_copy "$directory/$filename" "$host_dir/$filename"
         source_is_executable "$directory/$filename" ||
-            [[ "$filename" == start.sh.version ]] ||
+            [[ "$filename" == start.sh.version ||
+                "$filename" == artifact-manifest.txt ||
+                "$filename" == artifact-manifest.sig ]] ||
             die "$directory/$filename is not executable in the $SOURCE source"
     done < "$manifest"
+    mkdir -p "$host_dir/keys"
+    source_copy "$directory/keys/bootstrap-artifacts-signing.pub" \
+        "$host_dir/keys/bootstrap-artifacts-signing.pub"
 
     bash -n "$host_dir/start.sh"
     bash -n "$host_dir/bootstrap.sh"

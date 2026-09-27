@@ -41,12 +41,21 @@ the helper creates one for each new release and never rewrites older versions.
 `bootstrap.sh` embeds a full copy of `start.sh` (the Step 13 heredoc). Never
 edit the embedded copy directly. Edit the standalone `start.sh`, then use the
 release helper to update the release metadata, regenerate the embedded copy,
-create the versioned bootstrap archive, and run the syntax/version checks:
+create the versioned bootstrap archive, and sign the artifact manifest. Keep
+the private signing key outside Git and provide it through
+`ARTIFACT_SIGNING_KEY`:
 
 ```bash
-./scripts/start-sh-release.sh release 1.3.1
+ARTIFACT_SIGNING_KEY=/secure/path/bootstrap-artifacts-signing.pem \
+  ./scripts/start-sh-release.sh release 1.3.2
 ./scripts/start-sh-release.sh --check
 ```
+
+Each host directory publishes `artifact-manifest.txt` and its detached
+`artifact-manifest.sig`. The manifest is signed with the pinned public key in
+`hosts/ex44/keys/bootstrap-artifacts-signing.pub` and binds the launcher,
+bootstrap archives, version marker, and SSH public keys to SHA-256 digests.
+Release signing keys are operator-held; never add one to the repository.
 
 Before rollout, validate every host artifact set from the current working tree
 and from the staged Git index:
@@ -71,11 +80,14 @@ A release version is the same `MAJOR.MINOR.PATCH` in the standalone
 `hosts/ex44/bootstrap-<version>.sh`. The helper rejects non-forward versions
 because deployed launchers only self-update to a higher version. Review the
 diff, then commit the release files (`hosts/ex44/start.sh`, `bootstrap.sh`,
-`start.sh.version`, and the new versioned archive) and publish the commit with:
+`start.sh.version`, the manifest/signature, and the new versioned archive) and
+publish the commit with:
 
 ```bash
-git add hosts/ex44/start.sh hosts/ex44/bootstrap.sh hosts/ex44/start.sh.version hosts/ex44/bootstrap-1.3.1.sh
-git commit -m "release(start.sh): v1.3.1"
+git add hosts/ex44/start.sh hosts/ex44/bootstrap.sh hosts/ex44/start.sh.version \
+  hosts/ex44/artifact-manifest.txt hosts/ex44/artifact-manifest.sig \
+  hosts/ex44/bootstrap-1.3.2.sh
+git commit -m "release(start.sh): v1.3.2"
 ./scripts/start-sh-release.sh publish
 ```
 
@@ -94,9 +106,49 @@ Run the local self-update regression suite without contacting the network:
 
 ```bash
 tests/start-sh-self-update-test.sh
+tests/artifact-authentication-test.sh
 ```
 
-The check requires the release files, including the versioned archive, to be committed, confirms local `HEAD`
+## Artifact authentication
+
+Do not execute an initial bootstrap directly from an unverified raw HTTPS
+stream. Download the immutable versioned archive and its signed metadata, then
+verify the public-key fingerprint and both the detached signature and archive
+digest before running it:
+
+```bash
+version=1.3.1
+base=https://raw.githubusercontent.com/jedarden/bootstrap/main/hosts/ex44
+curl -fsSLo "bootstrap-$version.sh" "$base/bootstrap-$version.sh"
+curl -fsSLo artifact-manifest.txt "$base/artifact-manifest.txt"
+curl -fsSLo artifact-manifest.sig "$base/artifact-manifest.sig"
+curl -fsSLo bootstrap-artifacts-signing.pub "$base/keys/bootstrap-artifacts-signing.pub"
+test "$(openssl pkey -pubin -in bootstrap-artifacts-signing.pub -outform DER 2>/dev/null | sha256sum | awk '{print $1}')" = \
+  a6f26805c65bcd4de965b6d642c6dc5989de1cfa4c7e1b2e9bcb2b94ab28c589
+sed -n 's/^signature=//p' artifact-manifest.sig | base64 --decode > artifact-manifest.sig.bin
+openssl dgst -sha256 -verify bootstrap-artifacts-signing.pub \
+  -signature artifact-manifest.sig.bin artifact-manifest.txt
+awk -v file="bootstrap-$version.sh" '$1 == "artifact=" file {print $2 "  " file}' artifact-manifest.txt | sha256sum -c -
+chmod +x "bootstrap-$version.sh"
+sudo "./bootstrap-$version.sh"
+```
+
+The running bootstrap repeats this verification for its own file, the SSH
+keys, and every generated `start.sh`; a piped install is rejected. On an
+offline, malformed, stale, unsigned, or digest-mismatched response, bootstrap
+stops before trusting the artifact. `start.sh` keeps the existing launcher and
+continues to the selected agent when its update check fails.
+
+Key rotation uses an overlap release: add the new public key to the trusted
+key list in both launcher copies, publish that transition release signed by
+the old key, then move the manifest signer to the new key after deployed
+launchers have updated. Retain the old private key until the transition is
+confirmed, and publish a new key ID plus fingerprint in the release review.
+Never replace the only trusted key and signer in one release; already deployed
+launchers would correctly reject every update.
+
+The check requires the release files, including the versioned archive and
+signed manifest, to be committed, confirms local `HEAD`
 matches Forgejo `origin/main`, confirms GitHub `main` has the same commit, and
 byte-compares the raw `bootstrap.sh`, `start.sh`, `start.sh.version`, and
 `bootstrap-<version>.sh` files with that commit. `publish` runs the same check

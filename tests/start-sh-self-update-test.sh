@@ -8,6 +8,7 @@ set -Eeuo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 START_SH="$ROOT/hosts/ex44/start.sh"
 BASH_BIN_DIR=$(dirname "$(command -v bash)")
+OPENSSL_BIN_DIR=$(dirname "$(command -v openssl)")
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/start-sh-self-update.XXXXXX")
 trap 'rm -rf "$TMP"' EXIT
 
@@ -44,36 +45,44 @@ setup_case() {
     LAUNCHER="$CASE_HOME/start.sh"
     ORIGINAL="$CASE_ROOT/original-start.sh"
     PAYLOAD_FILE="$CASE_ROOT/remote-start.sh"
+    STALE_PAYLOAD_FILE="$CASE_ROOT/stale-start.sh"
     CURL_LOG="$CASE_ROOT/curl.log"
     MV_LOG="$CASE_ROOT/mv.log"
 
     mkdir -p "$CASE_HOME" "$FAKE_BIN"
     cp "$START_SH" "$LAUNCHER"
+    sed -i 's/^START_SH_VERSION="[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*"$/START_SH_VERSION="1.0.0"/' "$LAUNCHER"
     chmod +x "$LAUNCHER"
     cp "$LAUNCHER" "$ORIGINAL"
 
-    # The valid payload exits after the re-exec and prints the original flags,
-    # proving that a successful update reaches the new launcher.
-    printf '%s\n' \
-        '#!/usr/bin/env bash' \
-        'printf "UPDATED_LAUNCHER"' \
-        'printf " <%s>" "$@"' \
-        'printf "\\n"' > "$PAYLOAD_FILE"
+    # The valid payload is the signed committed launcher. The stale fixture
+    # has the right syntax but an older internal version and must be rejected.
+    cp "$START_SH" "$PAYLOAD_FILE"
+    cp "$PAYLOAD_FILE" "$STALE_PAYLOAD_FILE"
+    sed -i 's/^START_SH_VERSION="1\.3\.1"$/START_SH_VERSION="0.9.0"/' "$STALE_PAYLOAD_FILE"
     chmod +x "$PAYLOAD_FILE"
 
-    # curl serves either release metadata or the selected launcher payload.
-    # Unknown URLs intentionally fail so the normal agent-version check cannot
-    # reach the network during this test.
+    # curl serves the committed signed manifest or the selected launcher
+    # payload. Unknown URLs intentionally fail so the normal agent-version
+    # check cannot reach the network during this test.
     printf '%s\n' \
         '#!/usr/bin/env bash' \
         'url="${!#}"' \
         'printf "%s\\n" "$url" >> "$FAKE_CURL_LOG"' \
         'case "$url" in' \
-        '  */start.sh.version)' \
+        '  */artifact-manifest.txt)' \
         '    case "$FAKE_CURL_MODE" in' \
         '      version-unavailable) exit 22 ;;' \
-        '      version-malformed) printf "%s\\n" "not-a-version" ;;' \
-        '      *) printf "%s\\n" "999.0.0" ;;' \
+        '      version-malformed) printf "%s\\n" "not-a-manifest" ;;' \
+        '      manifest-tampered) sed "s/^version=.*/version=9.9.9/" "$FAKE_MANIFEST_FILE" ;;' \
+        '      *) cat "$FAKE_MANIFEST_FILE" ;;' \
+        '    esac' \
+        '    ;;' \
+        '  */artifact-manifest.sig)' \
+        '    case "$FAKE_CURL_MODE" in' \
+        '      version-unavailable|version-malformed) exit 22 ;;' \
+        '      manifest-tampered) cat "$FAKE_SIGNATURE_FILE" | sed "s/^signature=.*/signature=AAAA/" ;;' \
+        '      *) cat "$FAKE_SIGNATURE_FILE" ;;' \
         '    esac' \
         '    ;;' \
         '  */start.sh)' \
@@ -81,6 +90,8 @@ setup_case() {
         '      payload-unavailable) exit 22 ;;' \
         '      payload-empty) : ;;' \
         '      payload-malformed) printf "%s\\n" "#!/usr/bin/env bash" "if (" ;;' \
+        '      payload-tampered) sed "s/START_SH_VERSION/START_SH_VERSION_TAMPERED/" "$FAKE_PAYLOAD_FILE" ;;' \
+        '      payload-stale) cat "$FAKE_STALE_PAYLOAD_FILE" ;;' \
         '      *) cat "$FAKE_PAYLOAD_FILE" ;;' \
         '    esac' \
         '    ;;' \
@@ -120,11 +131,14 @@ run_case() {
     local output
     if ! output=$(
         HOME="$CASE_HOME" \
-        PATH="$FAKE_BIN:$BASH_BIN_DIR:/usr/local/bin:/usr/bin:/bin" \
+        PATH="$FAKE_BIN:$BASH_BIN_DIR:$OPENSSL_BIN_DIR:/usr/local/bin:/usr/bin:/bin" \
         HERDR_ENV=self-update-test \
         FAKE_CURL_MODE="$CASE_MODE" \
         FAKE_CURL_LOG="$CURL_LOG" \
         FAKE_PAYLOAD_FILE="$PAYLOAD_FILE" \
+        FAKE_STALE_PAYLOAD_FILE="$STALE_PAYLOAD_FILE" \
+        FAKE_MANIFEST_FILE="$ROOT/hosts/ex44/artifact-manifest.txt" \
+        FAKE_SIGNATURE_FILE="$ROOT/hosts/ex44/artifact-manifest.sig" \
         FAKE_MV_LOG="$MV_LOG" \
         FAKE_MV_FAILURE=false \
         "$LAUNCHER" --agent claude 2>&1
@@ -156,9 +170,9 @@ for launcher in "$START_SH" "$ROOT/hosts/ex44/bootstrap.sh"; do
         'legacy tmux history limit was reintroduced'
 done
 
-echo 'Checking successful update and atomic replacement...'
+echo 'Checking successful authenticated update and atomic replacement...'
 run_case success success
-assert_contains 'UPDATED_LAUNCHER <--no-update> <--agent> <claude>' "$CASE_OUTPUT" \
+assert_contains 'AGENT_LAUNCHED --dangerously-skip-permissions --model sonnet' "$CASE_OUTPUT" \
     'successful update did not re-exec the fetched launcher with original flags'
 cmp -s "$LAUNCHER" "$PAYLOAD_FILE" || fail 'successful update did not install the fetched payload'
 [[ -x "$LAUNCHER" ]] || fail 'successful update did not preserve launcher executability'
@@ -169,7 +183,7 @@ target_path=$(sed -n 's/^target=//p' "$MV_LOG")
 [[ "$source_path" == "$LAUNCHER.tmp."* ]] || fail 'replacement source was not a launcher-local temporary file'
 [[ "$(dirname "$source_path")" == "$(dirname "$LAUNCHER")" ]] || fail 'replacement temporary file was not on the launcher filesystem'
 
-echo 'Checking unavailable and malformed release metadata...'
+echo 'Checking unavailable and malformed signed release metadata...'
 run_case version-unavailable version-unavailable
 assert_unchanged 'unavailable release metadata damaged the launcher'
 assert_contains 'AGENT_LAUNCHED --dangerously-skip-permissions --model sonnet' "$CASE_OUTPUT" \
@@ -181,6 +195,12 @@ run_case version-malformed version-malformed
 assert_unchanged 'malformed release metadata damaged the launcher'
 payload_fetches=$(grep -Ec '/start\.sh$' "$CURL_LOG" || true)
 [[ "$payload_fetches" -eq 0 ]] || fail 'malformed metadata unexpectedly fetched a launcher payload'
+
+echo 'Checking tampered manifests and stale/tampered launcher payloads...'
+run_case manifest-tampered manifest-tampered
+assert_unchanged 'tampered release manifest damaged the launcher'
+assert_contains 'release manifest verification failed' "$CASE_OUTPUT" \
+    'tampered release manifest was not rejected'
 
 echo 'Checking unavailable and syntax-invalid launcher payloads...'
 run_case payload-unavailable payload-unavailable
@@ -195,9 +215,19 @@ assert_unchanged 'empty launcher payload damaged the launcher'
 assert_contains 'AGENT_LAUNCHED --dangerously-skip-permissions --model sonnet' "$CASE_OUTPUT" \
     'launcher did not remain usable after an empty payload'
 
+run_case payload-tampered payload-tampered
+assert_unchanged 'tampered launcher payload damaged the launcher'
+assert_contains 'failed authenticity, integrity, or syntax checks' "$CASE_OUTPUT" \
+    'tampered launcher payload was not rejected'
+
+run_case payload-stale payload-stale
+assert_unchanged 'stale launcher payload damaged the launcher'
+assert_contains 'failed authenticity, integrity, or syntax checks' "$CASE_OUTPUT" \
+    'stale launcher payload was not rejected'
+
 run_case payload-malformed payload-malformed
 assert_unchanged 'syntax-invalid launcher payload damaged the launcher'
-assert_contains 'failed syntax check, keeping current version' "$CASE_OUTPUT" \
+assert_contains 'failed authenticity, integrity, or syntax checks' "$CASE_OUTPUT" \
     'syntax-gate failure was not reported'
 assert_contains 'AGENT_LAUNCHED --dangerously-skip-permissions --model sonnet' "$CASE_OUTPUT" \
     'launcher did not remain usable after a syntax-gate failure'
@@ -207,11 +237,14 @@ echo 'Checking replacement failure preserves the existing launcher...'
 setup_case replacement-failure success
 output=$(
     HOME="$CASE_HOME" \
-    PATH="$FAKE_BIN:$BASH_BIN_DIR:/usr/local/bin:/usr/bin:/bin" \
+    PATH="$FAKE_BIN:$BASH_BIN_DIR:$OPENSSL_BIN_DIR:/usr/local/bin:/usr/bin:/bin" \
     HERDR_ENV=self-update-test \
     FAKE_CURL_MODE="$CASE_MODE" \
     FAKE_CURL_LOG="$CURL_LOG" \
     FAKE_PAYLOAD_FILE="$PAYLOAD_FILE" \
+    FAKE_STALE_PAYLOAD_FILE="$STALE_PAYLOAD_FILE" \
+    FAKE_MANIFEST_FILE="$ROOT/hosts/ex44/artifact-manifest.txt" \
+    FAKE_SIGNATURE_FILE="$ROOT/hosts/ex44/artifact-manifest.sig" \
     FAKE_MV_LOG="$MV_LOG" \
     FAKE_MV_FAILURE=true \
     "$LAUNCHER" --agent claude 2>&1

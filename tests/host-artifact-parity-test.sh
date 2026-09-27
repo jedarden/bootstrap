@@ -24,15 +24,18 @@ expect_failure() {
     fi
 }
 
-mkdir -p "$FIXTURE/scripts" "$FIXTURE/hosts/ex44"
+mkdir -p "$FIXTURE/scripts" "$FIXTURE/hosts/ex44/keys"
 cp -p "$ROOT/scripts/check-host-parity.sh" "$FIXTURE/scripts/"
 cp -p "$ROOT/README.md" "$FIXTURE/"
 cp -p \
     "$ROOT/hosts/ex44/bootstrap.sh" \
     "$ROOT/hosts/ex44/start.sh" \
     "$ROOT/hosts/ex44/start.sh.version" \
+    "$ROOT/hosts/ex44/artifact-manifest.txt" \
+    "$ROOT/hosts/ex44/artifact-manifest.sig" \
     "$ROOT/hosts/ex44/sync-start-sh.sh" \
     "$FIXTURE/hosts/ex44/"
+cp -p "$ROOT/hosts/ex44/keys/"*.pub "$FIXTURE/hosts/ex44/keys/"
 cp -p "$ROOT"/hosts/ex44/bootstrap-*.sh "$FIXTURE/hosts/ex44/"
 
 git -C "$FIXTURE" init -q -b main
@@ -51,8 +54,12 @@ cp -p \
     "$FIXTURE/hosts/ex44/bootstrap.sh" \
     "$FIXTURE/hosts/ex44/start.sh" \
     "$FIXTURE/hosts/ex44/start.sh.version" \
+    "$FIXTURE/hosts/ex44/artifact-manifest.txt" \
+    "$FIXTURE/hosts/ex44/artifact-manifest.sig" \
     "$FIXTURE/hosts/ex44/sync-start-sh.sh" \
     "$FIXTURE/hosts/lab/"
+mkdir -p "$FIXTURE/hosts/lab/keys"
+cp -p "$FIXTURE/hosts/ex44/keys/"*.pub "$FIXTURE/hosts/lab/keys/"
 cp -p "$FIXTURE"/hosts/ex44/bootstrap-*.sh "$FIXTURE/hosts/lab/"
 printf '%s\n' '| [hosts/lab/](./hosts/lab/) | Fixture-specific host split |' >> "$FIXTURE/README.md"
 printf '# lab-specific divergence\n' >> "$FIXTURE/hosts/lab/start.sh"

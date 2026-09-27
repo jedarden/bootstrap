@@ -17,7 +17,8 @@ Usage:
 
 With no scope options, audit both all Git-tracked files and the generated host
 artifacts under hosts/. --tracked audits the Git index. --artifacts audits
-start.sh, bootstrap.sh, start.sh.version, and every versioned bootstrap archive
+start.sh, bootstrap.sh, start.sh.version, signed release metadata, and every
+versioned bootstrap archive
 under each hosts/* directory. --path adds one file or directory explicitly.
 USAGE
 }
@@ -85,7 +86,9 @@ if [[ "$SCAN_ARTIFACTS" == true && -d "$ROOT/hosts" ]]; then
         for path in \
             "$host_dir/start.sh" \
             "$host_dir/bootstrap.sh" \
-            "$host_dir/start.sh.version"; do
+            "$host_dir/start.sh.version" \
+            "$host_dir/artifact-manifest.txt" \
+            "$host_dir/artifact-manifest.sig"; do
             add_file "$path"
         done
         while IFS= read -r -d '' path; do

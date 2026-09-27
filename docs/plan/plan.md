@@ -22,8 +22,8 @@ instance of what this repo produces.
 
 Distribution model: Forgejo (`git.ardenone.com`) is the commit source of
 truth per this workspace's hosting convention, mirrored to GitHub
-(`github.com/jedarden/bootstrap`). Both `bootstrap.sh`'s one-time `curl | bash`
-install instructions and every host's `start.sh` self-update mechanism
+(`github.com/jedarden/bootstrap`). Both `bootstrap.sh`'s one-time downloaded
+archive install instructions and every host's `start.sh` self-update mechanism
 deliberately pull from the GitHub mirror (`raw.githubusercontent.com`), not
 Forgejo directly — see ADR-1 for why that's intentional, not an oversight.
 
@@ -869,3 +869,51 @@ current archive copy; and verifies that root `README.md` host links resolve
 and cover every host directory. `--staged` continues to inspect the Git index,
 while `--allow-split` remains only as a compatibility no-op for older command
 lines.
+
+## ADR-14: 2026-09-27 — Signed manifest authenticates bootstrap and launcher artifacts
+
+### Context
+
+Raw GitHub HTTPS provides transport integrity but does not tell a host whether
+the response is the reviewed Forgejo release. The launcher previously trusted
+an unauthenticated version marker and then replaced itself with any syntactically
+valid payload. Bootstrap likewise fetched SSH keys and installed an embedded
+launcher without an artifact-level authenticity check. A cached, stale, or
+tampered response could therefore survive transport-level success.
+
+### Decision
+
+Each host release publishes a canonical `artifact-manifest.txt` and detached
+`artifact-manifest.sig`. The manifest is signed with an operator-held RSA key
+and records SHA-256 digests for the current bootstrap, every immutable archive,
+the launcher, its version marker, and the SSH public keys. The corresponding
+public key is committed and embedded in both bootstrap and start.sh; the
+manifest key ID is checked before OpenSSL verifies the signature.
+
+The initial bootstrap workflow downloads an immutable archive and verifies the
+known public-key fingerprint, manifest signature, and archive digest before
+execution. A file-backed bootstrap repeats its own archive check after
+installing OpenSSL, rejects an unverified pipe invocation, verifies fetched SSH
+keys, and verifies each generated `start.sh`. The launcher verifies the signed
+manifest before comparing versions, then checks the payload digest, internal
+version, Bash syntax, and atomic replacement. Any unavailable, malformed,
+unsigned, stale, or mismatched artifact leaves the existing launcher in place;
+bootstrap stops before trusting the artifact.
+
+Key rotation uses an overlap release: the transition launcher embeds both old
+and new trusted keys and is signed by the old key. After deployed launchers
+have crossed the transition, a later release can remove the old key and sign
+with the new key. The private signing key remains outside Git and release
+automation requires `ARTIFACT_SIGNING_KEY` explicitly.
+
+### Consequences
+
+- Raw HTTPS remains the distribution transport, but it is no longer the
+  artifact trust boundary.
+- A release requires a signing-key operation and commits the manifest and
+  signature alongside the generated bootstrap/archive artifacts.
+- Older immutable bootstrap archives remain verifiable because the manifest
+  retains their digests; the current launcher only installs a newer signed
+  launcher whose internal version agrees with the manifest.
+- Offline tests cover manifest tampering, payload tampering, stale artifacts,
+  signature failure, and failed atomic replacement without network access.

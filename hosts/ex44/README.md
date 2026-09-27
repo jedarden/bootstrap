@@ -40,8 +40,8 @@ Run the script on a freshly installed **Debian 12 or Ubuntu 24.04** EX44,
 from an interactive root shell. The host needs working DNS and outbound
 HTTPS access so the script can install packages and fetch the repository keys.
 The install path uses Bash-specific syntax and reads prompts from `/dev/tty`,
-so it requires `bash`, `curl`, and a terminal (a pseudo-TTY when running over
-SSH). It does not support a completely non-interactive install.
+so it requires `bash`, `curl`, `openssl`, and a terminal (a pseudo-TTY when
+running over SSH). It does not support a completely non-interactive install.
 
 Have these inputs ready before starting:
 
@@ -124,12 +124,18 @@ a root shell.
    `ssh root@<your-server-ip>`.
 5. Run the current bootstrap script as root:
    ```bash
-   curl -fsSL https://raw.githubusercontent.com/jedarden/bootstrap/main/hosts/ex44/bootstrap.sh | bash
+   version=1.3.1
+   base=https://raw.githubusercontent.com/jedarden/bootstrap/main/hosts/ex44
+   curl -fsSLo "bootstrap-$version.sh" "$base/bootstrap-$version.sh"
+   curl -fsSLo artifact-manifest.txt "$base/artifact-manifest.txt"
+   curl -fsSLo artifact-manifest.sig "$base/artifact-manifest.sig"
+   curl -fsSLo bootstrap-artifacts-signing.pub "$base/keys/bootstrap-artifacts-signing.pub"
+   # Verify the fingerprint, detached signature, and archive digest from
+   # ../../README.md#artifact-authentication before this step.
+   chmod +x "bootstrap-$version.sh"
+   ./"bootstrap-$version.sh"
    ```
-   From a non-root account, use the equivalent:
-   ```bash
-   curl -fsSL https://raw.githubusercontent.com/jedarden/bootstrap/main/hosts/ex44/bootstrap.sh | sudo bash
-   ```
+   From a non-root account, run the verified file with `sudo`.
 6. Answer the prompts described below. The bootstrap normally takes several
    minutes and prints a summary when complete.
 
@@ -209,7 +215,7 @@ SSH hardening, Docker, fail2ban, auditd, kernel settings, and (when
 configured) the restic/B2 repository:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/jedarden/bootstrap/main/hosts/ex44/bootstrap.sh | sudo bash -s -- --verify
+sudo ./bootstrap-1.3.1.sh --verify
 ```
 
 `--check` is an alias for `--verify`. Exit status `0` means every applicable
@@ -218,6 +224,22 @@ the summary still run after an individual failure. If B2 was skipped, the
 backup section is reported as `SKIPPED` rather than failed. Run as root with
 `sudo`; an unprivileged verification prints warnings and privileged checks
 will fail.
+
+### Artifact verification and failure behavior
+
+The bootstrap refuses an unverified pipe invocation and verifies its own
+immutable archive, the fetched SSH keys, and every generated `start.sh` against
+the signed manifest before trusting them. The launcher fetches the signed
+manifest before checking for an update, then requires the signed SHA-256 of the
+payload, its internal version, valid Bash syntax, and an atomic same-directory
+replacement. A missing, stale, tampered, malformed, or unsigned response keeps
+the existing launcher and continues without updating.
+
+The signing public key is pinned in both script copies. Rotate it with an
+overlap release that trusts old and new keys, signs the transition with the old
+key, and only then removes the old key after deployed launchers have updated.
+Publish the new key ID and fingerprint in the release review; never commit the
+private signing key.
 
 ### Verification Commands
 
@@ -447,10 +469,13 @@ hosts/ex44/
 ├── bootstrap-<version>.sh # Immutable archive created for every release
 ├── start.sh             # Canonical tmux + coding-agent launcher (self-updating)
 ├── start.sh.version     # Version string self-update compares against
+├── artifact-manifest.txt # Signed SHA-256 release manifest
+├── artifact-manifest.sig # Detached manifest signature
 ├── sync-start-sh.sh     # Regenerates bootstrap.sh's embedded copy from start.sh
 ├── keys/
 │   ├── jedarden.pub     # SSH public keys fetched at bootstrap time
-│   └── jeda-mbp.pub     # (both are installed; jeda-mbp is optional)
+│   ├── jeda-mbp.pub     # (both are installed; jeda-mbp is optional)
+│   └── bootstrap-artifacts-signing.pub # Pinned artifact verification key
 └── README.md            # This file
 ```
 

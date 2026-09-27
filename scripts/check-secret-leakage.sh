@@ -66,9 +66,18 @@ add_file() {
 }
 
 if [[ "$SCAN_TRACKED" == true ]]; then
-    while IFS= read -r -d '' path; do
-        add_file "$ROOT/$path"
-    done < <(git -C "$ROOT" ls-files -z --cached)
+    if git -C "$ROOT" rev-parse --show-toplevel >/dev/null 2>&1; then
+        while IFS= read -r -d '' path; do
+            add_file "$ROOT/$path"
+        done < <(git -C "$ROOT" ls-files -z --cached)
+    else
+        # git archive extractions are committed snapshots but intentionally do
+        # not contain .git. In that mode every extracted regular file is part
+        # of the tracked snapshot being verified.
+        while IFS= read -r -d '' path; do
+            add_file "$path"
+        done < <(find "$ROOT" -type f -not -path "$ROOT/.git/*" -print0)
+    fi
 fi
 
 if [[ "$SCAN_ARTIFACTS" == true && -d "$ROOT/hosts" ]]; then

@@ -110,7 +110,15 @@ Run the local self-update regression suite without contacting the network:
 ```bash
 tests/start-sh-self-update-test.sh
 tests/artifact-authentication-test.sh
+tests/signed-release-lifecycle-test.sh
 ```
+
+The signed-release lifecycle test runs the release helper in a disposable Git
+repository, serves its generated artifacts over local HTTPS, boots a clean
+Docker host from the verified archive, exercises launcher self-update, and
+publishes a higher-version rollback. It also checks tampered and incomplete
+downloads fail before the clean-host bootstrap boundary and runs the host
+artifact parity gate on each generated release.
 
 ## Artifact authentication
 

@@ -17,6 +17,7 @@ case "${1:-}" in
         bash -n "$ROOT/tests/artifact-signing-provisioning-test.sh"
         bash -n "$ROOT/tests/start-sh-interface-test.sh"
         bash -n "$ROOT/tests/start-sh-release-test.sh"
+        bash -n "$ROOT/tests/signed-release-lifecycle-test.sh"
         bash -n "$ROOT/scripts/check-host-parity.sh"
         bash -n "$ROOT/tests/host-artifact-parity-test.sh"
         bash -n "$ROOT/tests/artifact-secret-leakage-test.sh"
@@ -43,6 +44,7 @@ case "${1:-}" in
         "$ROOT/tests/artifact-signing-provisioning-test.sh"
         "$ROOT/tests/start-sh-interface-test.sh"
         "$ROOT/tests/start-sh-release-test.sh"
+        "$ROOT/tests/signed-release-lifecycle-test.sh"
         "$ROOT/tests/host-artifact-parity-test.sh"
         "$ROOT/tests/artifact-secret-leakage-test.sh"
         "$ROOT/scripts/check-secret-leakage.sh" --tracked --artifacts

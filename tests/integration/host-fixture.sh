@@ -59,7 +59,14 @@ case "$name" in
         exit 0
         ;;
     curl)
-        url="${!#}"
+        url=""
+        for argument in "$@"; do
+            if [[ "$argument" == http://* || "$argument" == https://* ]]; then
+                url="$argument"
+                break
+            fi
+        done
+        url="${url:-${!#}}"
         case "$url" in
             https://raw.githubusercontent.com/jedarden/bootstrap/main/hosts/ex44/keys/*)
                 key_name=${url##*/}
@@ -120,6 +127,19 @@ echo 'claude 1.0.0'
 CLAUDE
 chmod +x "$HOME/.local/bin/claude"
 CLAUDE_INSTALL
+                ;;
+            https://traefik-rs-manager:8200/v1/secret/bootstrap/*/b2)
+                case "${BOOTSTRAP_TEST_OPENBAO_MODE:-unavailable}" in
+                    complete|partial)
+                        # The jq double below supplies the fields from the
+                        # exec environment. Keep the transport response
+                        # value-free so this fixture never prints credentials.
+                        printf '%s\n' '{"data":{"data":{}}}'
+                        ;;
+                    *)
+                        exit 7
+                        ;;
+                esac
                 ;;
             *)
                 echo "unexpected curl URL in bootstrap fixture: $url" >&2
@@ -317,7 +337,23 @@ SSHD
         fi
         ;;
     jq)
-        echo 'bootstrap-test.tailnet.ts.net'
+        case "$*" in
+            '-e .data.data')
+                [[ "${BOOTSTRAP_TEST_OPENBAO_MODE:-unavailable}" != unavailable ]] || exit 1
+                echo '{}'
+                ;;
+            '-r .data.data.b2_application_key // empty')
+                [[ "${BOOTSTRAP_TEST_OPENBAO_MODE:-unavailable}" != unavailable ]] || exit 1
+                printf '%s\n' "${BOOTSTRAP_TEST_OPENBAO_B2_KEY:-}"
+                ;;
+            '-r .data.data.restic_password // empty')
+                [[ "${BOOTSTRAP_TEST_OPENBAO_MODE:-unavailable}" == complete ]] || exit 0
+                printf '%s\n' "${BOOTSTRAP_TEST_OPENBAO_RESTIC_PASSWORD:-}"
+                ;;
+            *)
+                echo 'bootstrap-test.tailnet.ts.net'
+                ;;
+        esac
         ;;
     docker)
         [[ $EUID -ne 0 ]] || {

@@ -91,9 +91,16 @@ run_bootstrap() {
     local label=$1
     local input=$2
     local output="$TMP/$label-output"
+    shift 2
+
+    local docker_args=(exec -i)
+    if [[ $# -gt 0 ]]; then
+        docker_args+=(--env-file "$1")
+    fi
+    docker_args+=("$CONTAINER" bash /test/bootstrap-under-test.sh)
 
     echo "Running bootstrap ($label)..."
-    if ! docker exec -i "$CONTAINER" bash /test/bootstrap-under-test.sh \
+    if ! docker "${docker_args[@]}" \
         < "$input" > "$output" 2>&1; then
         echo "bootstrap failed during $label; output follows:" >&2
         cat "$output" >&2
@@ -111,23 +118,58 @@ sops_restic_password='sops-password'
 sops_input="$TMP/sops-input"
 printf '\n\n\n' > "$sops_input"
 
+write_private_env() {
+    local path=$1
+    shift
+    (
+        umask 077
+        printf '%s\n' "$@" > "$path"
+    )
+}
+
+sops_env="$TMP/sops.env"
+write_private_env "$sops_env" \
+    "BOOTSTRAP_B2_APPLICATION_KEY=$sops_b2_key" \
+    "BOOTSTRAP_RESTIC_PASSWORD=$sops_restic_password"
+
 run_bootstrap_with_sops() {
     local label=$1
     local input=$2
+    local env_file=${3:-$sops_env}
     local output="$TMP/$label-output"
 
     echo "Running bootstrap ($label) with SOPS environment input..."
-    if ! docker exec -i \
-        -e "BOOTSTRAP_B2_APPLICATION_KEY=$sops_b2_key" \
-        -e "BOOTSTRAP_RESTIC_PASSWORD=$sops_restic_password" \
-        "$CONTAINER" bash /test/bootstrap-under-test.sh \
-        < "$input" > "$output" 2>&1; then
+    if ! run_bootstrap "$label" "$input" "$env_file"; then
         echo "bootstrap failed during $label; output follows:" >&2
         cat "$output" >&2
         exit 1
     fi
     grep -Fq 'Using backup secrets supplied by SOPS through the process environment.' "$output" || {
         echo "bootstrap did not use SOPS input during $label; output follows:" >&2
+        cat "$output" >&2
+        exit 1
+    }
+    grep -Fq '=== Bootstrap Complete' "$output" || {
+        echo "bootstrap did not report completion during $label; output follows:" >&2
+        cat "$output" >&2
+        exit 1
+    }
+}
+
+run_bootstrap_with_openbao() {
+    local label=$1
+    local input=$2
+    local env_file=$3
+    local output="$TMP/$label-output"
+
+    echo "Running bootstrap ($label) with OpenBao input..."
+    if ! run_bootstrap "$label" "$input" "$env_file"; then
+        echo "bootstrap failed during $label; output follows:" >&2
+        cat "$output" >&2
+        exit 1
+    fi
+    grep -Fq 'Secrets retrieved from OpenBao.' "$output" || {
+        echo "bootstrap did not use OpenBao input during $label; output follows:" >&2
         cat "$output" >&2
         exit 1
     }
@@ -156,8 +198,9 @@ run_bootstrap_expect_failure() {
 }
 
 partial_sops_output="$TMP/partial-sops-output"
-if docker exec -i \
-    -e "BOOTSTRAP_B2_APPLICATION_KEY=$sops_b2_key" \
+partial_sops_env="$TMP/partial-sops.env"
+write_private_env "$partial_sops_env" "BOOTSTRAP_B2_APPLICATION_KEY=$sops_b2_key"
+if docker exec -i --env-file "$partial_sops_env" \
     "$CONTAINER" bash /test/bootstrap-under-test.sh \
     </dev/null > "$partial_sops_output" 2>&1; then
     echo 'ASSERTION FAILED: bootstrap accepted a partial SOPS secret pair' >&2
@@ -413,6 +456,10 @@ assert_mode 'trading home is private' /home/trading 700
 assert_mode 'coding authorized keys are private' /home/coding/.ssh/authorized_keys 600
 assert_mode 'trading authorized keys are private' /home/trading/.ssh/authorized_keys 600
 assert_mode 'restic credentials are private' /etc/restic/b2.env 600
+assert_file_contains 'interactive fallback supplies the B2 application key' \
+    /etc/restic/b2.env 'test-application-key'
+assert_file_contains 'interactive fallback supplies the restic password' \
+    /etc/restic/b2.env 'test-password'
 assert_file_contains 'restic repository uses the configured prefix' \
     /etc/restic/b2.env 'RESTIC_REPOSITORY="b2:test-bucket:test-prefix/'
 assert_container 'rootless Docker prerequisites are installed' \
@@ -560,6 +607,86 @@ assert_container 'second run preserves both users ownership boundaries' \
      [[ $(stat -c %U:%G:%a /home/trading) == trading:trading:700 ]] && \
      [[ $(grep -Fc "coding:" /etc/subuid) -eq 1 ]] && \
      [[ $(grep -Fc "trading:" /etc/subuid) -eq 1 ]]'
+
+openbao_token='fixture-openbao-token'
+openbao_b2_key='openbao-application-key'
+openbao_restic_password='openbao-password'
+openbao_env="$TMP/openbao.env"
+write_private_env "$openbao_env" \
+    "OPENBAO_TOKEN=$openbao_token" \
+    'BOOTSTRAP_TEST_OPENBAO_MODE=complete' \
+    "BOOTSTRAP_TEST_OPENBAO_B2_KEY=$openbao_b2_key" \
+    "BOOTSTRAP_TEST_OPENBAO_RESTIC_PASSWORD=$openbao_restic_password"
+
+run_bootstrap_with_openbao openbao "$sops_input" "$openbao_env"
+assert_file_contains 'OpenBao supplies the B2 application key' \
+    /etc/restic/b2.env "$openbao_b2_key"
+assert_file_contains 'OpenBao supplies the restic password' \
+    /etc/restic/b2.env "$openbao_restic_password"
+
+partial_openbao_key='partial-openbao-application-key'
+partial_openbao_env="$TMP/partial-openbao.env"
+write_private_env "$partial_openbao_env" \
+    "OPENBAO_TOKEN=$openbao_token" \
+    'BOOTSTRAP_TEST_OPENBAO_MODE=partial' \
+    "BOOTSTRAP_TEST_OPENBAO_B2_KEY=$partial_openbao_key"
+partial_openbao_input="$TMP/partial-openbao-input"
+printf '\n\n%s\n%s\n%s\n\n' \
+    'interactive-fallback-application-key' \
+    'interactive-fallback-password' \
+    'interactive-fallback-password' > "$partial_openbao_input"
+run_bootstrap partial-openbao "$partial_openbao_input" "$partial_openbao_env"
+partial_openbao_output="$TMP/partial-openbao-output"
+grep -Fq 'OpenBao secret exists but missing required fields' "$partial_openbao_output" || {
+    echo 'ASSERTION FAILED: partial OpenBao pair produced the wrong diagnostic' >&2
+    cat "$partial_openbao_output" >&2
+    exit 1
+}
+assert_file_contains 'partial OpenBao pair falls back to the interactive B2 key' \
+    /etc/restic/b2.env 'interactive-fallback-application-key'
+assert_file_contains 'partial OpenBao pair falls back to the interactive password' \
+    /etc/restic/b2.env 'interactive-fallback-password'
+if docker exec "$CONTAINER" grep -Fq -- "$partial_openbao_key" /etc/restic/b2.env; then
+    echo 'ASSERTION FAILED: partial OpenBao pair was silently mixed with interactive input' >&2
+    exit 1
+fi
+
+rotation_sops_b2_key='rotated-sops-application-key'
+rotation_sops_restic_password='rotated-sops-password'
+rotation_sops_env="$TMP/rotation-sops.env"
+write_private_env "$rotation_sops_env" \
+    "BOOTSTRAP_B2_APPLICATION_KEY=$rotation_sops_b2_key" \
+    "BOOTSTRAP_RESTIC_PASSWORD=$rotation_sops_restic_password" \
+    "OPENBAO_TOKEN=$openbao_token" \
+    'BOOTSTRAP_TEST_OPENBAO_MODE=complete' \
+    "BOOTSTRAP_TEST_OPENBAO_B2_KEY=$openbao_b2_key" \
+    "BOOTSTRAP_TEST_OPENBAO_RESTIC_PASSWORD=$openbao_restic_password"
+run_bootstrap_with_sops rotation-sops "$sops_input" "$rotation_sops_env"
+rotation_sops_output="$TMP/rotation-sops-output"
+if grep -Fq 'Secrets retrieved from OpenBao.' "$rotation_sops_output"; then
+    echo 'ASSERTION FAILED: SOPS/OpenBao rotation silently selected OpenBao' >&2
+    exit 1
+fi
+assert_file_contains 'SOPS wins during deliberate rotation' \
+    /etc/restic/b2.env "$rotation_sops_b2_key"
+assert_file_contains 'SOPS rotation updates the restic password' \
+    /etc/restic/b2.env "$rotation_sops_restic_password"
+if docker exec "$CONTAINER" grep -Fq -- "$openbao_b2_key" /etc/restic/b2.env; then
+    echo 'ASSERTION FAILED: SOPS/OpenBao rotation silently mixed stale OpenBao credentials' >&2
+    exit 1
+fi
+
+rotated_openbao_env="$TMP/rotated-openbao.env"
+write_private_env "$rotated_openbao_env" \
+    "OPENBAO_TOKEN=$openbao_token" \
+    'BOOTSTRAP_TEST_OPENBAO_MODE=complete' \
+    "BOOTSTRAP_TEST_OPENBAO_B2_KEY=$rotation_sops_b2_key" \
+    "BOOTSTRAP_TEST_OPENBAO_RESTIC_PASSWORD=$rotation_sops_restic_password"
+run_bootstrap_with_openbao openbao-after-rotation "$sops_input" "$rotated_openbao_env"
+assert_file_contains 'deliberate OpenBao rotation publishes the new B2 key' \
+    /etc/restic/b2.env "$rotation_sops_b2_key"
+assert_file_contains 'deliberate OpenBao rotation publishes the new restic password' \
+    /etc/restic/b2.env "$rotation_sops_restic_password"
 
 verify_output="$TMP/verify-output"
 if ! docker exec "$CONTAINER" bash /test/bootstrap-under-test.sh --verify > "$verify_output" 2>&1; then

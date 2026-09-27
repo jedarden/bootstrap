@@ -21,6 +21,16 @@ assert_contains() {
     [[ "$actual" == *"$expected"* ]] || fail "$description (missing $(printf '%q' "$expected"))"
 }
 
+assert_file_contains() {
+    local expected=$1 path=$2 description=$3
+    grep -Fq -- "$expected" "$path" || fail "$description (missing $(printf '%q' "$expected") in $path)"
+}
+
+assert_file_not_contains() {
+    local unexpected=$1 path=$2 description=$3
+    ! grep -Fq -- "$unexpected" "$path" || fail "$description (found $(printf '%q' "$unexpected") in $path)"
+}
+
 assert_unchanged() {
     cmp -s "$LAUNCHER" "$ORIGINAL" || fail "${1:-launcher changed unexpectedly}"
 }
@@ -125,6 +135,26 @@ run_case() {
 
     CASE_OUTPUT="$output"
 }
+
+echo 'Checking tmux OOM hardening in both launcher copies...'
+for launcher in "$START_SH" "$ROOT/hosts/ex44/bootstrap.sh"; do
+    assert_file_contains \
+        'sudo -n choom -n -1000 -p "$SERVER_PID"' \
+        "$launcher" \
+        'tmux server OOM protection drifted'
+    assert_file_contains \
+        'set -g history-limit 2000' \
+        "$launcher" \
+        'tmux history limit drifted'
+    assert_file_contains \
+        'AGENT_ARGV=(claude --dangerously-skip-permissions --model sonnet)' \
+        "$launcher" \
+        'Claude model pin drifted'
+    assert_file_not_contains \
+        'set -g history-limit 10000' \
+        "$launcher" \
+        'legacy tmux history limit was reintroduced'
+done
 
 echo 'Checking successful update and atomic replacement...'
 run_case success success

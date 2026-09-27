@@ -36,8 +36,16 @@ assert_unchanged() {
     cmp -s "$LAUNCHER" "$ORIGINAL" || fail "${1:-launcher changed unexpectedly}"
 }
 
+assert_no_update_temps() {
+    local leftovers
+    leftovers=$(find "$CASE_HOME" -maxdepth 1 \
+        \( -name "$(basename "$LAUNCHER").tmp.*" -o \
+           -name "$(basename "$LAUNCHER").manifest.*" \) -print)
+    [[ -z "$leftovers" ]] || fail "temporary self-update files were not cleaned up: $leftovers"
+}
+
 setup_case() {
-    local name=$1 mode=$2
+    local name=$1 mode=$2 installed_version=${3:-1.0.0}
 
     CASE_ROOT="$TMP/$name"
     CASE_HOME="$CASE_ROOT/home"
@@ -51,7 +59,7 @@ setup_case() {
 
     mkdir -p "$CASE_HOME" "$FAKE_BIN"
     cp "$START_SH" "$LAUNCHER"
-    sed -i 's/^START_SH_VERSION="[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*"$/START_SH_VERSION="1.0.0"/' "$LAUNCHER"
+    sed -i "s/^START_SH_VERSION=\"[0-9][0-9]*\\.[0-9][0-9]*\\.[0-9][0-9]*\"$/START_SH_VERSION=\"$installed_version\"/" "$LAUNCHER"
     chmod +x "$LAUNCHER"
     cp "$LAUNCHER" "$ORIGINAL"
 
@@ -89,6 +97,7 @@ setup_case() {
         '    case "$FAKE_CURL_MODE" in' \
         '      payload-unavailable) exit 22 ;;' \
         '      payload-empty) : ;;' \
+        '      payload-interrupted) printf "%s\\n" "#!/usr/bin/env bash" "START_SH_VERSION=\\\"1.3.1\\\""; exit 18 ;;' \
         '      payload-malformed) printf "%s\\n" "#!/usr/bin/env bash" "if (" ;;' \
         '      payload-tampered) sed "s/START_SH_VERSION/START_SH_VERSION_TAMPERED/" "$FAKE_PAYLOAD_FILE" ;;' \
         '      payload-stale) cat "$FAKE_STALE_PAYLOAD_FILE" ;;' \
@@ -125,8 +134,8 @@ setup_case() {
 }
 
 run_case() {
-    local name=$1 mode=$2
-    setup_case "$name" "$mode"
+    local name=$1 mode=$2 installed_version=${3:-1.0.0}
+    setup_case "$name" "$mode" "$installed_version"
 
     local output
     if ! output=$(
@@ -182,6 +191,22 @@ target_path=$(sed -n 's/^target=//p' "$MV_LOG")
 [[ "$target_path" == "$LAUNCHER" ]] || fail 'atomic replacement targeted the wrong launcher'
 [[ "$source_path" == "$LAUNCHER.tmp."* ]] || fail 'replacement source was not a launcher-local temporary file'
 [[ "$(dirname "$source_path")" == "$(dirname "$LAUNCHER")" ]] || fail 'replacement temporary file was not on the launcher filesystem'
+assert_no_update_temps
+
+echo 'Checking equal and lower remote versions do not replace the launcher...'
+run_case equal success 1.3.1
+assert_unchanged 'equal release version changed the launcher'
+[[ ! -f "$MV_LOG" ]] || fail 'equal release version reached the replacement step'
+payload_fetches=$(grep -Ec '/start\.sh$' "$CURL_LOG" || true)
+[[ "$payload_fetches" -eq 0 ]] || fail 'equal release version fetched a launcher payload'
+assert_no_update_temps
+
+run_case lower success 1.3.2
+assert_unchanged 'lower remote release version changed the launcher'
+[[ ! -f "$MV_LOG" ]] || fail 'lower remote release version reached the replacement step'
+payload_fetches=$(grep -Ec '/start\.sh$' "$CURL_LOG" || true)
+[[ "$payload_fetches" -eq 0 ]] || fail 'lower remote release version fetched a launcher payload'
+assert_no_update_temps
 
 echo 'Checking unavailable and malformed signed release metadata...'
 run_case version-unavailable version-unavailable
@@ -190,17 +215,20 @@ assert_contains 'AGENT_LAUNCHED --dangerously-skip-permissions --model sonnet' "
     'launcher did not continue with the installed agent after metadata became unavailable'
 payload_fetches=$(grep -Ec '/start\.sh$' "$CURL_LOG" || true)
 [[ "$payload_fetches" -eq 0 ]] || fail 'unavailable metadata unexpectedly fetched a launcher payload'
+assert_no_update_temps
 
 run_case version-malformed version-malformed
 assert_unchanged 'malformed release metadata damaged the launcher'
 payload_fetches=$(grep -Ec '/start\.sh$' "$CURL_LOG" || true)
 [[ "$payload_fetches" -eq 0 ]] || fail 'malformed metadata unexpectedly fetched a launcher payload'
+assert_no_update_temps
 
 echo 'Checking tampered manifests and stale/tampered launcher payloads...'
 run_case manifest-tampered manifest-tampered
 assert_unchanged 'tampered release manifest damaged the launcher'
 assert_contains 'release manifest verification failed' "$CASE_OUTPUT" \
     'tampered release manifest was not rejected'
+assert_no_update_temps
 
 echo 'Checking unavailable and syntax-invalid launcher payloads...'
 run_case payload-unavailable payload-unavailable
@@ -209,21 +237,31 @@ assert_contains 'AGENT_LAUNCHED --dangerously-skip-permissions --model sonnet' "
     'launcher did not continue with the installed agent after payload fetch failure'
 payload_fetches=$(grep -Ec '/start\.sh$' "$CURL_LOG" || true)
 [[ "$payload_fetches" -eq 1 ]] || fail 'unavailable payload did not fetch the launcher exactly once'
+assert_no_update_temps
+
+run_case payload-interrupted payload-interrupted
+assert_unchanged 'interrupted launcher payload damaged the launcher'
+assert_contains 'AGENT_LAUNCHED --dangerously-skip-permissions --model sonnet' "$CASE_OUTPUT" \
+    'launcher did not remain usable after an interrupted payload download'
+assert_no_update_temps
 
 run_case payload-empty payload-empty
 assert_unchanged 'empty launcher payload damaged the launcher'
 assert_contains 'AGENT_LAUNCHED --dangerously-skip-permissions --model sonnet' "$CASE_OUTPUT" \
     'launcher did not remain usable after an empty payload'
+assert_no_update_temps
 
 run_case payload-tampered payload-tampered
 assert_unchanged 'tampered launcher payload damaged the launcher'
 assert_contains 'failed authenticity, integrity, or syntax checks' "$CASE_OUTPUT" \
     'tampered launcher payload was not rejected'
+assert_no_update_temps
 
 run_case payload-stale payload-stale
 assert_unchanged 'stale launcher payload damaged the launcher'
 assert_contains 'failed authenticity, integrity, or syntax checks' "$CASE_OUTPUT" \
     'stale launcher payload was not rejected'
+assert_no_update_temps
 
 run_case payload-malformed payload-malformed
 assert_unchanged 'syntax-invalid launcher payload damaged the launcher'
@@ -232,6 +270,7 @@ assert_contains 'failed authenticity, integrity, or syntax checks' "$CASE_OUTPUT
 assert_contains 'AGENT_LAUNCHED --dangerously-skip-permissions --model sonnet' "$CASE_OUTPUT" \
     'launcher did not remain usable after a syntax-gate failure'
 [[ ! -f "$MV_LOG" ]] || fail 'syntax-invalid payload reached the replacement step'
+assert_no_update_temps
 
 echo 'Checking replacement failure preserves the existing launcher...'
 setup_case replacement-failure success
@@ -254,5 +293,6 @@ assert_contains 'could not install fetched start.sh, keeping current version' "$
     'replacement failure was not reported'
 assert_contains 'AGENT_LAUNCHED --dangerously-skip-permissions --model sonnet' "$output" \
     'launcher did not remain usable after replacement failure'
+assert_no_update_temps
 
 echo 'start.sh self-update regression tests passed.'

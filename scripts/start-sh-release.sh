@@ -5,7 +5,9 @@ set -Eeuo pipefail
 #
 # The standalone start.sh is the source of truth. bootstrap.sh contains a
 # generated copy, and start.sh.version is the version advertised to deployed
-# launchers. Keep all three in agreement before committing or publishing.
+# launchers. Every release also archives the complete bootstrap script as
+# bootstrap-<version>.sh. Keep all release metadata in agreement before
+# committing or publishing.
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 HOST_DIR="$ROOT/hosts/ex44"
@@ -43,12 +45,14 @@ Usage:
 
 Commands:
   release VERSION       Set the next start.sh version, regenerate the
-                        bootstrap.sh heredoc, and run all release checks.
+                        bootstrap.sh metadata and heredoc, create its
+                        bootstrap-VERSION.sh archive, and run all checks.
   rollback GIT-REF VERSION
                         Restore start.sh from GIT-REF, publish it under a new
-                        forward version, regenerate bootstrap.sh, and check it.
+                        forward version, regenerate bootstrap.sh, create its
+                        archive, and check it.
   --check               Verify syntax, generated-copy equality, and that the
-                        standalone, embedded, and advertised versions agree.
+                        current archive contents and all release metadata agree.
   distribution-check    Verify Forgejo main is mirrored to GitHub and that
                         GitHub raw release artifacts match that commit.
   publish               Push the already-committed release to origin/main.
@@ -77,6 +81,26 @@ extract_start_version() {
     printf '%s\n' "${line%\"}"
 }
 
+extract_bootstrap_version() {
+    local path=$1 comment assignment
+    local -a comments assignments
+
+    mapfile -t comments < <(grep -E '^# Version: [0-9]+\.[0-9]+\.[0-9]+$' "$path" || true)
+    [[ ${#comments[@]} -eq 1 ]] ||
+        die "$path must contain exactly one bootstrap Version comment"
+    comment=${comments[0]#\# Version: }
+
+    mapfile -t assignments < <(grep -E '^VERSION="[0-9]+\.[0-9]+\.[0-9]+"$' "$path" || true)
+    [[ ${#assignments[@]} -eq 1 ]] ||
+        die "$path must contain exactly one bootstrap VERSION assignment"
+    assignment=${assignments[0]#VERSION=\"}
+    assignment=${assignment%\"}
+
+    [[ "$comment" == "$assignment" ]] ||
+        die "$path bootstrap metadata disagrees: comment=$comment, VERSION=$assignment"
+    printf '%s\n' "$comment"
+}
+
 read_advertised_version() {
     local line
     mapfile -t lines < "$VERSION_FILE"
@@ -102,17 +126,35 @@ require_forward_version() {
 }
 
 check_versions() {
-    local standalone embedded advertised
+    local standalone embedded advertised bootstrap archive archive_version archive_start
     standalone=$(extract_start_version "$START_SH")
     embedded=$(extract_start_version "$BOOTSTRAP_SH")
     advertised=$(read_advertised_version)
+    bootstrap=$(extract_bootstrap_version "$BOOTSTRAP_SH")
 
     [[ "$standalone" == "$embedded" ]] ||
         die "embedded version $embedded disagrees with standalone version $standalone"
     [[ "$standalone" == "$advertised" ]] ||
         die "advertised version $advertised disagrees with standalone version $standalone"
+    [[ "$standalone" == "$bootstrap" ]] ||
+        die "bootstrap version $bootstrap disagrees with standalone version $standalone"
 
-    echo "Version agreement: start.sh=$standalone, bootstrap.sh=$embedded, start.sh.version=$advertised"
+    archive="$HOST_DIR/bootstrap-$standalone.sh"
+    [[ -f "$archive" ]] ||
+        die "release archive is missing: $archive"
+    [[ -x "$archive" ]] ||
+        die "release archive is not executable: $archive"
+    bash -n "$archive"
+    archive_version=$(extract_bootstrap_version "$archive")
+    archive_start=$(extract_start_version "$archive")
+    [[ "$archive_version" == "$standalone" ]] ||
+        die "archive version $archive_version disagrees with release version $standalone"
+    [[ "$archive_start" == "$standalone" ]] ||
+        die "archive embedded version $archive_start disagrees with release version $standalone"
+    cmp -s "$BOOTSTRAP_SH" "$archive" ||
+        die "release archive $archive is not an exact copy of bootstrap.sh"
+
+    echo "Version agreement: start.sh=$standalone, bootstrap.sh=$bootstrap, start.sh.version=$advertised, archive=$standalone"
 }
 
 check_release() {
@@ -143,8 +185,9 @@ fail_distribution() {
 }
 
 raw_artifacts_match() {
-    local tmp=$1 spec filename
-    for spec in "${DISTRIBUTION_ARTIFACTS[@]}"; do
+    local tmp=$1 archive_filename=$2 spec filename
+    local -a artifacts=("${DISTRIBUTION_ARTIFACTS[@]}" "hosts/ex44/$archive_filename|$archive_filename")
+    for spec in "${artifacts[@]}"; do
         filename=${spec#*|}
         curl --fail --location --silent --show-error \
             "$GITHUB_RAW_ROOT/$filename" > "$tmp/actual-$filename" 2>/dev/null || return 1
@@ -153,12 +196,16 @@ raw_artifacts_match() {
 }
 
 verify_distribution() {
-    local expected_commit forgejo_commit github_commit expected_version
+    local expected_commit forgejo_commit github_commit expected_version expected_archive_filename
     local timeout poll deadline spec path filename
+    local -a artifacts
 
     check_release
+    expected_version=$(read_advertised_version)
+    expected_archive_filename="bootstrap-$expected_version.sh"
     git -C "$ROOT" diff-index --quiet HEAD -- \
-        hosts/ex44/bootstrap.sh hosts/ex44/start.sh hosts/ex44/start.sh.version ||
+        hosts/ex44/bootstrap.sh hosts/ex44/start.sh hosts/ex44/start.sh.version \
+        "hosts/ex44/$expected_archive_filename" ||
         die "release files have uncommitted changes; commit them before distribution-check"
 
     expected_commit=$(git -C "$ROOT" rev-parse HEAD) ||
@@ -174,7 +221,8 @@ verify_distribution() {
         die "DISTRIBUTION_POLL_SECONDS must be a non-negative integer"
 
     DISTRIBUTION_TMP=$(mktemp -d "${TMPDIR:-/tmp}/start-sh-distribution.XXXXXX")
-    for spec in "${DISTRIBUTION_ARTIFACTS[@]}"; do
+    artifacts=("${DISTRIBUTION_ARTIFACTS[@]}" "hosts/ex44/$expected_archive_filename|$expected_archive_filename")
+    for spec in "${artifacts[@]}"; do
         path=${spec%%|*}
         filename=${spec#*|}
         if ! git -C "$ROOT" show "$expected_commit:$path" > "$DISTRIBUTION_TMP/expected-$filename"; then
@@ -189,7 +237,7 @@ verify_distribution() {
     deadline=$((SECONDS + timeout))
     while :; do
         if github_commit=$(remote_main_commit "$GITHUB_REPO_URL"); then
-            if [[ "$github_commit" == "$forgejo_commit" ]] && raw_artifacts_match "$DISTRIBUTION_TMP"; then
+            if [[ "$github_commit" == "$forgejo_commit" ]] && raw_artifacts_match "$DISTRIBUTION_TMP" "$expected_archive_filename"; then
                 cleanup_distribution_tmp
                 echo "Distribution verified: commit=$expected_commit, version=$expected_version"
                 return 0
@@ -227,6 +275,32 @@ write_version_file() {
     printf '%s\n' "$1" > "$VERSION_FILE"
 }
 
+write_bootstrap_version() {
+    local path=$1 version=$2 tmp
+    tmp=$(mktemp "${TMPDIR:-/tmp}/bootstrap-release.XXXXXX")
+    sed -E \
+        -e "s/^# Version: [0-9]+\.[0-9]+\.[0-9]+$/# Version: $version/" \
+        -e "s/^VERSION=\"[0-9]+\.[0-9]+\.[0-9]+\"$/VERSION=\"$version\"/" \
+        -e "s/bootstrap-[0-9]+\.[0-9]+\.[0-9]+\.sh/bootstrap-$version.sh/g" \
+        "$path" > "$tmp"
+    chmod --reference="$path" "$tmp"
+    if ! [[ "$(extract_bootstrap_version "$tmp")" == "$version" ]]; then
+        rm -f "$tmp"
+        die "could not update bootstrap metadata in $path"
+    fi
+    mv "$tmp" "$path"
+}
+
+create_bootstrap_archive() {
+    local version=$1 archive tmp
+    archive="$HOST_DIR/bootstrap-$version.sh"
+    tmp=$(mktemp "${TMPDIR:-/tmp}/bootstrap-archive.XXXXXX")
+    cp "$BOOTSTRAP_SH" "$tmp"
+    chmod --reference="$BOOTSTRAP_SH" "$tmp"
+    chmod +x "$tmp"
+    mv "$tmp" "$archive"
+}
+
 prepare_release() {
     local next=$1 current
     require_version "$next"
@@ -236,7 +310,9 @@ prepare_release() {
 
     write_start_version "$START_SH" "$next"
     write_version_file "$next"
+    write_bootstrap_version "$BOOTSTRAP_SH" "$next"
     "$SYNC_SH"
+    create_bootstrap_archive "$next"
     check_release
     echo "Prepared start.sh release $next. Review the diff, then commit the release files."
 }
@@ -260,17 +336,24 @@ prepare_rollback() {
     chmod --reference="$START_SH" "$candidate"
     mv "$candidate" "$START_SH"
     write_version_file "$next"
+    write_bootstrap_version "$BOOTSTRAP_SH" "$next"
     "$SYNC_SH"
+    create_bootstrap_archive "$next"
     check_release
     echo "Prepared rollback release $next. Review the diff, then commit the release files."
 }
 
 publish_release() {
-    local branch
+    local branch version archive_filename
     branch=$(git -C "$ROOT" branch --show-current)
     [[ "$branch" == main ]] || die "publish must run on main (current branch: ${branch:-detached})"
     check_release
-    git -C "$ROOT" diff-index --quiet HEAD -- "$START_REL" hosts/ex44/bootstrap.sh hosts/ex44/start.sh.version ||
+    version=$(read_advertised_version)
+    archive_filename="bootstrap-$version.sh"
+    git -C "$ROOT" ls-files --error-unmatch "hosts/ex44/$archive_filename" >/dev/null 2>&1 ||
+        die "release archive is not tracked: hosts/ex44/$archive_filename"
+    git -C "$ROOT" diff-index --quiet HEAD -- "$START_REL" hosts/ex44/bootstrap.sh hosts/ex44/start.sh.version \
+        "hosts/ex44/$archive_filename" ||
         die "release files have uncommitted changes; commit them before publishing"
     git -C "$ROOT" push origin main
     [[ -z "$(git -C "$ROOT" rev-list origin/main..HEAD)" ]] ||

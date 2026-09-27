@@ -318,7 +318,8 @@ in shell history, logs, or this procedure.
 
 ```
 hosts/ex44/
-├── bootstrap.sh         # Main bootstrap script (embeds start.sh, see below)
+├── bootstrap.sh         # Current bootstrap script (embeds start.sh, see below)
+├── bootstrap-<version>.sh # Immutable archive created for every release
 ├── start.sh             # Canonical tmux + coding-agent launcher (self-updating)
 ├── start.sh.version     # Version string self-update compares against
 ├── sync-start-sh.sh     # Regenerates bootstrap.sh's embedded copy from start.sh
@@ -340,14 +341,15 @@ edit `hosts/ex44/start.sh`, then run:
 ./scripts/start-sh-release.sh --check
 ```
 
-The helper updates `START_SH_VERSION`, writes the matching
-`start.sh.version`, regenerates the embedded copy, and runs `bash -n` on both
-scripts. The check rejects any disagreement among the standalone,
-embedded, and advertised versions. Review and commit those three release
-files, then run `./scripts/start-sh-release.sh publish`; pushing `origin/main`
-updates Forgejo, whose server-side mirror publishes the GitHub raw URL used by
-hosts. See `../../docs/plan/plan.md` ADR-1 and ADR-8 for the source-of-truth
-and release decisions.
+The helper updates the `bootstrap.sh` metadata and `START_SH_VERSION`, writes
+the matching `start.sh.version`, regenerates the embedded copy, and creates
+the exact `bootstrap-<version>.sh` archive. The check rejects any disagreement
+among the standalone, embedded, bootstrap, archive, and advertised versions,
+or any archive content drift. Review and commit those four release files, then
+run `./scripts/start-sh-release.sh publish`; pushing `origin/main` updates
+Forgejo, whose server-side mirror publishes the GitHub raw URLs used by hosts.
+See `../../docs/plan/plan.md` ADR-1 and ADR-8 for the source-of-truth and
+release decisions.
 
 For rollback, restore a known-good Git revision under a new higher version so
 the self-update comparison accepts it:
@@ -415,7 +417,7 @@ Run it as root (or with `sudo`): the UFW, `sshd -T`, fail2ban and auditd checks 
 
 **Example output:**
 ```
-=== Bootstrap Verification v1.1.6 ===
+=== Bootstrap Verification v1.3.1 ===
 
 === Firewall ===
 UFW active:                              ✓ PASS

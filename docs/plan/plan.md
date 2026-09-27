@@ -952,3 +952,43 @@ automation requires `ARTIFACT_SIGNING_KEY` explicitly.
   rejection after retirement, stale trust anchors, missing keys, unsigned
   manifests, manifest tampering, payload tampering, stale artifacts,
   signature failure, and failed atomic replacement.
+
+## ADR-15: 2026-09-27 — Provision the initial artifact trust anchor before the first release
+
+### Context
+
+Signed manifests only establish a useful trust boundary after a verifier has a
+trusted public key. The repository had the steady-state release and rotation
+procedures, but not a first-time operator workflow that explained how to
+generate that key, independently verify its fingerprint, install the public
+anchor, and produce the first signed manifest without moving private key
+material into Git or a command line.
+
+### Decision
+
+The initial provisioning workflow is documented in
+`docs/security/artifact-signing.md`. Operators generate a 3072-bit RSA key in
+a mode-0700 directory outside the repository, keep the private key mode 0600,
+derive a public key, and compare its DER-SHA-256 fingerprint with a separately
+approved record. Only the mode-0644 public key is installed at
+`hosts/<host>/keys/bootstrap-artifacts-signing.pub`. The same public key and
+key ID are pinned in the canonical launcher, propagated to the bootstrap by
+`sync-start-sh.sh`, and used by `start-sh-release.sh` through the
+path-only `ARTIFACT_SIGNING_KEY` contract.
+
+The provisioning acceptance test performs this workflow in a disposable
+fixture: it generates the private key outside the fixture, rejects a different
+fingerprint, installs and synchronizes the public anchor, creates the first
+signed release, verifies its manifest, and asserts that private-key material
+does not appear in the fixture or release output.
+
+### Consequences
+
+- A new host lineage has a repeatable, reviewable trust-anchor setup before
+  its first public artifact is consumed.
+- The private key is never a repository input or a value-bearing command
+  argument; release automation receives only its path.
+- Fingerprint approval remains an operator/process control and cannot be
+  inferred from an untrusted copy of the public key.
+- Future replacements follow ADR-14's overlap rotation procedure rather than
+  replacing the only trust anchor in one release.

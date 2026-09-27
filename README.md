@@ -56,6 +56,9 @@ Each host directory publishes `artifact-manifest.txt` and its detached
 `hosts/ex44/keys/bootstrap-artifacts-signing.pub` and binds the launcher,
 bootstrap archives, version marker, and SSH public keys to SHA-256 digests.
 Release signing keys are operator-held; never add one to the repository.
+For a new host lineage or the first signing release, follow the
+[initial trust-anchor provisioning runbook](./docs/security/artifact-signing.md)
+before publishing any artifact.
 
 Before rollout, validate every host artifact set from the current working tree
 and from the staged Git index:

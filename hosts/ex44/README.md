@@ -276,13 +276,31 @@ hosts/ex44/
 **start.sh is single-sourced.** `bootstrap.sh` embeds a byte-for-byte copy of
 `start.sh` in a heredoc to drop onto each new user's home directory; every
 already-bootstrapped host's `start.sh` self-updates from the standalone
-`start.sh` file afterward. After editing `start.sh`, run
-`./sync-start-sh.sh` to regenerate the embedded copy and bump both
-`START_SH_VERSION` (inside `start.sh`) and `start.sh.version` — never hand-edit
-the embedded copy in `bootstrap.sh` directly, and never hand-patch a deployed
-`~/start.sh` on a host (land the change here first). See
-`../../docs/plan/plan.md` ADR-1 for why this matters — both failure modes it
-guards against already happened once.
+`start.sh` file afterward. Never hand-edit the embedded copy in
+`bootstrap.sh` or hand-patch a deployed `~/start.sh`. From the repository root,
+edit `hosts/ex44/start.sh`, then run:
+
+```bash
+./scripts/start-sh-release.sh release 1.3.1
+./scripts/start-sh-release.sh --check
+```
+
+The helper updates `START_SH_VERSION`, writes the matching
+`start.sh.version`, regenerates the embedded copy, and runs `bash -n` on both
+scripts. The check rejects any disagreement among the standalone,
+embedded, and advertised versions. Review and commit those three release
+files, then run `./scripts/start-sh-release.sh publish`; pushing `origin/main`
+updates Forgejo, whose server-side mirror publishes the GitHub raw URL used by
+hosts. See `../../docs/plan/plan.md` ADR-1 and ADR-8 for the source-of-truth
+and release decisions.
+
+For rollback, restore a known-good Git revision under a new higher version so
+the self-update comparison accepts it:
+
+```bash
+./scripts/start-sh-release.sh rollback GOOD_COMMIT 1.3.2
+./scripts/start-sh-release.sh publish
+```
 
 **start.sh launches claude or codex, as the `start` command.** Selection order
 is the positional agent (`start codex`) or `--agent claude|codex` >

@@ -24,6 +24,7 @@ case "${1:-}" in
 esac
 
 bash -n start.sh || { echo "ERROR: start.sh has a syntax error, aborting sync" >&2; exit 1; }
+bash -n bootstrap.sh || { echo "ERROR: bootstrap.sh has a syntax error, aborting sync" >&2; exit 1; }
 
 # Export CHECK_MODE to Python
 export CHECK_MODE
@@ -32,11 +33,43 @@ python3 - <<'PY'
 import difflib
 import os
 import pathlib
+import re
 import sys
 
 repo_dir = pathlib.Path(".")
 start_sh = (repo_dir / "start.sh").read_text()
 bootstrap = (repo_dir / "bootstrap.sh").read_text()
+version_file = (repo_dir / "start.sh.version").read_text()
+
+version_pattern = re.compile(r'^START_SH_VERSION="([0-9]+\.[0-9]+\.[0-9]+)"$', re.MULTILINE)
+
+
+def extract_version(text, label):
+    matches = version_pattern.findall(text)
+    if len(matches) != 1:
+        sys.exit(f"ERROR: {label} must contain exactly one START_SH_VERSION assignment")
+    return matches[0]
+
+
+standalone_version = extract_version(start_sh, "start.sh")
+embedded_version = extract_version(bootstrap, "bootstrap.sh embedded start.sh")
+version_lines = version_file.splitlines()
+if len(version_lines) != 1 or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version_lines[0]):
+    sys.exit("ERROR: start.sh.version must contain exactly one MAJOR.MINOR.PATCH line")
+advertised_version = version_lines[0]
+if standalone_version != advertised_version:
+    sys.exit(
+        "ERROR: version mismatch: "
+        f"start.sh={standalone_version}, "
+        f"start.sh.version={advertised_version}"
+    )
+if os.environ.get('CHECK_MODE') == 'true' and embedded_version != standalone_version:
+    sys.exit(
+        "ERROR: version mismatch: "
+        f"start.sh={standalone_version}, "
+        f"bootstrap.sh={embedded_version}, "
+        f"start.sh.version={advertised_version}"
+    )
 
 begin_marker = '    cat > "/home/$user/start.sh" << \'STARTSH\'\n'
 end_marker = "STARTSH\n"
@@ -73,6 +106,13 @@ if os.environ.get('CHECK_MODE') == 'true':
 
 # Sync mode: update the file
 new_bootstrap = bootstrap[:body_start] + start_sh + bootstrap[body_end:]
+
+new_embedded_version = extract_version(new_bootstrap, "generated bootstrap.sh embedded start.sh")
+if new_embedded_version != standalone_version:
+    sys.exit(
+        "ERROR: generated bootstrap.sh version "
+        f"{new_embedded_version} disagrees with start.sh version {standalone_version}"
+    )
 
 if new_bootstrap == bootstrap:
     print("bootstrap.sh embedded copy already matches start.sh - no change")

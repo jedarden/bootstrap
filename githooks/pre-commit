@@ -30,7 +30,7 @@ done
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
-for f in sync-start-sh.sh start.sh bootstrap.sh; do
+for f in sync-start-sh.sh start.sh bootstrap.sh start.sh.version; do
     git show ":$dir/$f" > "$tmp/$f" 2>/dev/null || exit 0  # partial layout; skip
 done
 chmod +x "$tmp/sync-start-sh.sh"

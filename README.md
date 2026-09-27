@@ -36,17 +36,45 @@ alongside the current script in the host directory that shipped them. See
 ## Development
 
 `bootstrap.sh` embeds a full copy of `start.sh` (the Step 13 heredoc). Never
-edit the embedded copy directly — edit the standalone `start.sh` that sits
-next to it, regenerate the embedded copy, and commit both together (see
-`docs/plan/plan.md`, ADR-1 and ADR-4):
+edit the embedded copy directly. Edit the standalone `start.sh`, then use the
+release helper to update its version, regenerate the embedded copy, and run
+the syntax/version checks:
 
 ```bash
-cd hosts/ex44            # the directory containing start.sh and bootstrap.sh
-./sync-start-sh.sh       # regenerate the embedded copy (--check: verify only)
+./scripts/start-sh-release.sh release 1.3.1
+./scripts/start-sh-release.sh --check
 ```
 
-A pre-commit hook enforces this on every commit. Git does not version hooks,
-so after a fresh clone activate it once:
+A release version is the same `MAJOR.MINOR.PATCH` in the standalone
+`START_SH_VERSION=...` assignment, the generated embedded copy, and
+`hosts/ex44/start.sh.version`. The helper rejects non-forward versions because
+deployed launchers only self-update to a higher version. Review the diff, then
+commit the release files (`hosts/ex44/start.sh`, `bootstrap.sh`, and
+`start.sh.version`) and publish the commit with:
+
+```bash
+git add hosts/ex44/start.sh hosts/ex44/bootstrap.sh hosts/ex44/start.sh.version
+git commit -m "release(start.sh): v1.3.1"
+./scripts/start-sh-release.sh publish
+```
+
+Forgejo remains the write-side source of truth. `publish` pushes only
+`origin/main`; the configured Forgejo mirror then publishes the same commit
+through GitHub, which is the URL used by bootstrap and self-update.
+
+To roll back a bad release, restore a known-good launcher from Git history
+under a new, higher version, then review, commit, and publish it:
+
+```bash
+./scripts/start-sh-release.sh rollback GOOD_COMMIT 1.3.2
+git diff -- hosts/ex44/start.sh hosts/ex44/bootstrap.sh hosts/ex44/start.sh.version
+git add hosts/ex44/start.sh hosts/ex44/bootstrap.sh hosts/ex44/start.sh.version
+git commit -m "rollback(start.sh): restore GOOD_COMMIT"
+./scripts/start-sh-release.sh publish
+```
+
+The pre-commit hook also enforces the generated-copy check on every commit.
+Git does not version hooks, so after a fresh clone activate it once:
 
 ```bash
 git config core.hooksPath githooks

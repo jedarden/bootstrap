@@ -576,3 +576,71 @@ existing `start`.
 - Sandbox-tested: fresh link, re-run, pre-existing unrelated `start`, launch
   through the link, non-deployed copy (no link), self-update through the link,
   and a real v1.2.2 to v1.3.0 upgrade.
+
+## ADR-8: 2026-09-27 — Versioned start.sh releases are prepared locally and published through the mirror
+
+### Context
+
+`start.sh` has three release representations that must travel together:
+`hosts/ex44/start.sh` is the standalone payload used by already-bootstrapped
+hosts, `bootstrap.sh` embeds that payload for new hosts, and
+`start.sh.version` is the remote version marker used by self-update. The
+existing sync script prevented content drift, but the release procedure still
+depended on a contributor remembering to bump two version locations, run all
+syntax checks, and publish to the remote that feeds GitHub. The self-update
+logic also only moves forward, so restoring an older payload under its old
+version would not roll back a host that had already seen the bad release.
+
+### Decision
+
+`scripts/start-sh-release.sh` is the checked-in release workflow. The normal
+flow is:
+
+1. Edit only `hosts/ex44/start.sh`.
+2. Run `scripts/start-sh-release.sh release VERSION`. It requires a semantic
+   `MAJOR.MINOR.PATCH` greater than the current standalone version, updates
+   `START_SH_VERSION` and `start.sh.version`, regenerates the heredoc with
+   `sync-start-sh.sh`, and validates both scripts.
+3. Run `scripts/start-sh-release.sh --check` before reviewing and committing.
+   The check runs `bash -n` on standalone and bootstrap scripts, verifies the
+   generated copy, and requires the standalone, embedded, and advertised
+   versions to be identical.
+4. Commit the three release files and run the helper's `publish` command.
+   It checks `main`, checks that those files are committed, and runs
+   `git push origin main`. Forgejo is the write-side source of truth; its
+   configured server-side mirror publishes the commit to GitHub, the read
+   side used by bootstrap and host self-update.
+
+Rollback is a new forward release, not a lower version. The `rollback`
+command takes a known-good Git ref and a new higher version, restores the
+standalone payload from that ref, updates its version, regenerates the
+embedded copy, and applies the same checks. This makes the payload older
+while keeping the version comparison monotonic, so deployed hosts accept the
+rollback automatically.
+
+The existing versioned pre-commit hook remains a second line of defense for
+generated-copy drift. The definition-of-done script invokes both the sync
+check and the release check, so clean committed extractions exercise the same
+contract as a contributor's checkout.
+
+### Alternatives considered
+
+- **Bump only `start.sh.version` and let hosts fetch whatever is at HEAD.**
+  Rejected because a marker/script mismatch can trigger a broken update.
+- **Rollback by reusing the old version number or pushing a lower version.**
+  Rejected because `start.sh` deliberately ignores remote versions that are
+  not greater than the installed version; rollback would silently fail.
+- **Push directly to GitHub from the release helper.** Rejected because
+  Forgejo is the repository source of truth and the workspace convention is
+  one configured `origin` with a server-side GitHub mirror.
+
+### Consequences
+
+- A contributor gets one command for versioning, generation, and validation;
+  the generated copy and version agreement cannot be accidentally omitted
+  from a prepared release.
+- Releases still require an explicit review and commit before `publish`; the
+  helper does not stage unrelated work or manufacture a commit.
+- A rollback appears as a new release in the version stream. Git history
+  remains the source of the restored payload, while the higher version keeps
+  all already-deployed launchers eligible for self-update.

@@ -9,6 +9,8 @@ set -Eeuo pipefail
 
 SUPPORTED_ARCHITECTURE="amd64"
 OS_RELEASE_FILE="/etc/os-release"
+DNS_CHECK_HOST="raw.githubusercontent.com"
+HTTPS_CHECK_URL="https://raw.githubusercontent.com/jedarden/bootstrap/main/README.md"
 
 usage() {
     cat <<'USAGE'
@@ -79,7 +81,7 @@ case "$os_id:$version_id" in
         ;;
 esac
 
-for required_command in bash apt-get dpkg systemctl getent; do
+for required_command in bash apt-get dpkg systemctl getent curl; do
     command -v "$required_command" >/dev/null 2>&1 ||
         fail "required command '$required_command' is missing; install it in the base image before bootstrap"
 done
@@ -89,5 +91,18 @@ architecture=$(dpkg --print-architecture 2>/dev/null) ||
 [[ "$architecture" == "$SUPPORTED_ARCHITECTURE" ]] ||
     fail "unsupported architecture '$architecture'; EX44 bootstrap supports $SUPPORTED_ARCHITECTURE only"
 
+systemd_version=$(systemctl show --property=Version --value 2>/dev/null) ||
+    fail "systemd manager is unavailable; systemd must be PID 1 before bootstrap"
+[[ -n "$systemd_version" ]] ||
+    fail "systemd manager did not report a version; systemd must be PID 1 before bootstrap"
+
+getent ahosts "$DNS_CHECK_HOST" >/dev/null 2>&1 ||
+    fail "DNS lookup failed for $DNS_CHECK_HOST"
+
+curl --fail --silent --show-error --location --max-time 10 \
+    --output /dev/null "$HTTPS_CHECK_URL" >/dev/null 2>&1 ||
+    fail "outbound HTTPS check failed for $HTTPS_CHECK_URL"
+
 echo "Preflight passed: $supported_release on $architecture."
-echo "Assumptions remaining for bootstrap: root, an interactive terminal, systemd as PID 1, and working DNS/HTTPS access."
+echo "Validated: root, systemd as PID 1, DNS, and outbound HTTPS."
+echo "Operator check remaining: run the interactive bootstrap from a controlling terminal."

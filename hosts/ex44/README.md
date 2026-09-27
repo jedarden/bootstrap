@@ -49,8 +49,8 @@ covered by acceptance tests. In particular, a release with a similar package
 layout is not implicitly supported.
 
 The host must be a fresh install with root access, Bash, `apt-get`, `dpkg`,
-`systemctl` with systemd as PID 1, `getent`, a controlling terminal, working
-DNS, and outbound HTTPS access. The bootstrap installs `curl` and `openssl`
+`systemctl` with systemd as PID 1, `getent`, `curl`, a controlling terminal,
+working DNS, and outbound HTTPS access. The bootstrap installs `openssl`
 before it authenticates its signed release artifacts. It is intentionally
 interactive and does not support a completely non-interactive install.
 
@@ -61,12 +61,14 @@ sudo ./scripts/bootstrap-preflight.sh
 ```
 
 The preflight exits 0 only for Debian 12/bookworm or Ubuntu 24.04/noble on
-amd64 and with the required package/system commands present. It exits 1,
-without prompting or changing the host, when `/etc/os-release` is missing or
-does not identify an OS, the family/release is outside the matrix, the
-architecture is unsupported, or a required command is absent. A successful
-preflight does not replace the later DNS, HTTPS, package, systemd, and
-artifact-authentication checks performed by bootstrap.
+amd64 and with the required package/system commands, a reachable systemd
+manager, DNS resolution, and outbound HTTPS present. It exits 1, without
+prompting or changing the host, when `/etc/os-release` is missing or does not
+identify an OS, the family/release is outside the matrix, the architecture is
+unsupported, a required command is absent, systemd is unavailable, DNS fails,
+or the HTTPS check fails. The controlling-terminal requirement remains an
+operator check; the preflight is deliberately runnable non-interactively.
+Bootstrap still performs its own package and artifact-authentication checks.
 
 Have these inputs ready before starting:
 

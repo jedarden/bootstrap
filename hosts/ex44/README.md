@@ -24,70 +24,145 @@ Bootstrap script for Hetzner EX44 dedicated server. Sets up a hardened, multi-us
 | **Network** | httpie, mtr, tcpdump, netcat, dnsutils |
 | **Dev** | git, gh (GitHub CLI), tmux, neovim, python3, nodejs, build-essential |
 
-## Prerequisites
+## Prerequisites and configuration contract
 
-Before running, have ready:
-- A **Tailscale auth key** from [Tailscale Admin Console](https://login.tailscale.com/admin/settings/keys)
+Run the script on a freshly installed **Debian 12 or Ubuntu 24.04** EX44,
+from an interactive root shell. The host needs working DNS and outbound
+HTTPS access so the script can install packages and fetch the repository keys.
+The install path uses Bash-specific syntax and reads prompts from `/dev/tty`,
+so it requires `bash`, `curl`, and a terminal (a pseudo-TTY when running over
+SSH). It does not support a completely non-interactive install.
 
-SSH key is embedded in the repo (`keys/jedarden.pub`).
+Have these inputs ready before starting:
 
-### Optional: OpenBao Secret Sourcing
+- A **Tailscale auth key** from the [Tailscale Admin Console](https://login.tailscale.com/admin/settings/keys).
+  It is required unless Tailscale is already connected on the host.
+- Optional Backblaze B2 details: bucket name, path prefix, account/key ID,
+  application key, and a restic encryption password. Leave the bucket name
+  empty to skip backup configuration.
+- Optional Cloudflare Tunnel token. Leave it empty to skip cloudflared.
 
-Instead of entering secrets manually each bootstrap run, you can pre-provision them in OpenBao. If the `OPENBAO_TOKEN` environment variable is set and Tailscale is running, the script will attempt to fetch B2 credentials from OpenBao before falling back to interactive prompts.
+There is no SSH-key prompt. The script fetches `keys/jedarden.pub` (required)
+and `keys/jeda-mbp.pub` (best effort) from the repository’s raw GitHub URL and
+writes those keys to `~/.ssh/authorized_keys` for every configured user. The
+matching private keys must therefore be available to whoever will connect;
+the same repository-managed keys are installed for all selected users.
 
-**Expected OpenBao secret structure:**
-```bash
-# Path: secret/bootstrap/<hardware-uuid>/b2
+Install mode has no flags for supplying these values. Its supported flags are
+only `--version`/`-v` and `--verify`/`--check`; all installation choices are
+collected by prompts.
+
+### Optional: OpenBao secret sourcing
+
+Instead of typing the B2 application key and restic password on every run,
+set `OPENBAO_TOKEN` in the environment before starting. OpenBao lookup is
+attempted only when Tailscale is active; otherwise the script falls back to
+the prompts. The expected KV-v2 data is:
+
+```json
 {
   "data": {
     "data": {
-      "b2_application_key": "your-b2-application-key",
-      "restic_password": "your-restic-encryption-password"
+      "b2_application_key": "<b2-application-key>",
+      "restic_password": "<restic-encryption-password>"
     }
   }
 }
 ```
 
-**To use OpenBao sourcing:**
-```bash
-export OPENBAO_TOKEN="your-openbao-token"
-curl -sL https://raw.githubusercontent.com/jedarden/bootstrap/main/hosts/ex44/bootstrap.sh | bash
-```
-
-The script will:
-1. Check if Tailscale is running (required for OpenBao access)
-2. Attempt to fetch secrets from `https://traefik-rs-manager:8200/v1/secret/bootstrap/<hardware-uuid>/b2`
-3. Fall back to manual prompts if OpenBao is unreachable or secrets don't exist
-
-This is optional — the script works fine without OpenBao, just with manual secret entry each run.
+The lookup path is
+`secret/bootstrap/<hardware-uuid>/b2`, through
+`https://traefik-rs-manager:8200/v1/secret/bootstrap/<hardware-uuid>/b2`.
+OpenBao is optional; it does not supply the Tailscale or cloudflared token.
+If invoking the script through `sudo` from a non-root shell, preserve the
+variable (`sudo --preserve-env=OPENBAO_TOKEN bash`) or export it after opening
+a root shell.
 
 ## Usage
 
 ### From Hetzner Rescue System
 
-1. Boot into rescue mode via [Hetzner Robot](https://robot.hetzner.com)
-2. SSH into rescue: `ssh root@<your-server-ip>`
+1. Boot into rescue mode via [Hetzner Robot](https://robot.hetzner.com).
+2. SSH into rescue: `ssh root@<your-server-ip>`.
 3. Install the OS:
    ```bash
    installimage
    # Select: Debian 12 or Ubuntu 24.04
    # Reboot when prompted
    ```
-4. SSH back in after reboot: `ssh root@<your-server-ip>`
-5. Run bootstrap:
+4. SSH back in after reboot and keep an interactive terminal:
+   `ssh root@<your-server-ip>`.
+5. Run the current bootstrap script as root:
    ```bash
-   curl -sL https://raw.githubusercontent.com/jedarden/bootstrap/main/hosts/ex44/bootstrap.sh | bash
+   curl -fsSL https://raw.githubusercontent.com/jedarden/bootstrap/main/hosts/ex44/bootstrap.sh | bash
    ```
-6. Enter your Tailscale auth key when prompted
-7. Wait ~5-10 minutes for completion
+   From a non-root account, use the equivalent:
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/jedarden/bootstrap/main/hosts/ex44/bootstrap.sh | sudo bash
+   ```
+6. Answer the prompts described below. The bootstrap normally takes several
+   minutes and prints a summary when complete.
+
+### Prompts and saved configuration
+
+On the first run the script asks for the following, in order:
+
+| Prompt | Contract |
+| --- | --- |
+| Hostname | Defaults to the current hostname when left empty. |
+| Users | Press Enter at the first username prompt to create the defaults `coding` and `trading`. Otherwise enter one or more lowercase usernames matching `[a-z_][a-z0-9_-]*`, then press Enter on an empty prompt to finish. |
+| B2 bucket, path prefix, account/key ID | The path prefix defaults to `hetzner-ex44`; the script appends the machine’s hardware UUID to form the restic repository path. Backup is enabled only when both the bucket and account/key ID are non-empty; leave them empty to skip it. |
+| Reboot after bootstrap | `y` enables an automatic reboot after a five-second delay; the default is `N`. |
+| Tailscale auth key | Required unless `tailscale status` already succeeds. |
+| Cloudflared token | Optional; an empty response skips cloudflared. |
+| B2 application key and encryption password | Asked only when both a bucket and account/key ID were supplied, unless valid OpenBao data supplies both secrets. The password is confirmed interactively. |
+| Restore from backup | Asked only when the configured restic repository already has snapshots. `y` restores `/home` and `/var/lib/tailscale` after setup; this overwrites those paths. |
+
+The script saves non-secret choices in `/etc/bootstrap/config` with mode
+`0600`: hostname, users, B2 bucket/path/account ID, and the reboot choice. On
+a later run it displays that configuration and asks `Use previous
+configuration? [Y/n]`; the default is yes, in which case only secrets are
+requested again. Answer `n` to re-enter the non-secret choices. Tailscale,
+cloudflared, and B2 secrets are not reused from `/etc/bootstrap/config`. When
+backup is configured, credentials are written to `/etc/restic/b2.env` with
+mode `0600` for restic and the scheduled backup jobs.
+
+The bootstrap is designed to be rerunnable, but a rerun still reapplies
+system state: it rewrites the SSH hardening configuration, resets and
+re-enables UFW rules, refreshes user `authorized_keys`, and reinstalls or
+updates missing software. Review the restore prompt carefully before
+accepting it.
 
 ### After Bootstrap
 
-Connect via Tailscale (public IP is firewalled):
+Unless automatic reboot was selected, reboot when convenient so all kernel
+and sysctl changes take effect. The public IP is firewalled except for
+Hetzner rescue access; connect through Tailscale instead:
+
 ```bash
 ssh coding@<hostname>.tailnet
 ssh trading@<hostname>.tailnet
 ```
+
+The configured users are in the `sudo` group and can launch the coding-agent
+launcher with `start claude` or `start codex`.
+
+### Post-bootstrap verification
+
+Run the read-only verification mode as root. It checks UFW, Tailscale,
+SSH hardening, Docker, fail2ban, auditd, kernel settings, and (when
+configured) the restic/B2 repository:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/jedarden/bootstrap/main/hosts/ex44/bootstrap.sh | sudo bash -s -- --verify
+```
+
+`--check` is an alias for `--verify`. Exit status `0` means every applicable
+check passed; exit status `1` means one or more checks failed. All checks and
+the summary still run after an individual failure. If B2 was skipped, the
+backup section is reported as `SKIPPED` rather than failed. Run as root with
+`sudo`; an unprivileged verification prints warnings and privileged checks
+will fail.
 
 ## Security Features
 

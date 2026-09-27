@@ -62,6 +62,19 @@ Forgejo remains the write-side source of truth. `publish` pushes only
 `origin/main`; the configured Forgejo mirror then publishes the same commit
 through GitHub, which is the URL used by bootstrap and self-update.
 
+Before deploying a release, verify the distribution path from the committed
+Forgejo state through GitHub and its raw artifacts:
+
+```bash
+./scripts/start-sh-release.sh distribution-check
+```
+
+The check requires the release files to be committed, confirms local `HEAD`
+matches Forgejo `origin/main`, confirms GitHub `main` has the same commit, and
+byte-compares the raw `bootstrap.sh`, `start.sh`, and `start.sh.version` files
+with that commit. `publish` runs the same check after pushing to Forgejo and
+waits for the mirror and raw files to converge.
+
 To roll back a bad release, restore a known-good launcher from Git history
 under a new, higher version, then review, commit, and publish it:
 

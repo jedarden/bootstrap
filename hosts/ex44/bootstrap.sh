@@ -278,7 +278,17 @@ REBOOT_AFTER_BOOTSTRAP=false
 BACKUP_CONFIGURED=false
 RESTORE_FROM_BACKUP=false
 TAILSCALE_AUTHKEY=""
+TAILSCALE_AUTHKEY_FILE=""
 CLOUDFLARED_TOKEN=""
+
+# Remove the temporary enrollment input even if an unexpected command failure
+# exits the script between creating it and the normal cleanup below.
+cleanup_tailscale_authkey_file() {
+    if [[ -n "${TAILSCALE_AUTHKEY_FILE:-}" ]]; then
+        rm -f -- "$TAILSCALE_AUTHKEY_FILE"
+    fi
+}
+trap cleanup_tailscale_authkey_file EXIT
 
 # A SOPS environment file must contain both backup secrets. Do not silently
 # combine one SOPS value with one OpenBao value or an interactive prompt.
@@ -413,11 +423,12 @@ echo ""
 echo "--- Secrets (required each run) ---"
 
 # Tailscale - check if already connected
-if tailscale status &>/dev/null 2>&1; then
+if command -v tailscale &>/dev/null && tailscale status &>/dev/null 2>&1; then
     echo "Tailscale already connected, skipping auth key."
     TAILSCALE_AUTHKEY=""
 else
-    read -p "Tailscale auth key (tskey-auth-...): " TAILSCALE_AUTHKEY <&3
+    read -rsp "Tailscale auth key (input hidden; tskey-auth-...): " TAILSCALE_AUTHKEY <&3
+    echo ""
     if [[ -z "$TAILSCALE_AUTHKEY" ]]; then
         echo "ERROR: Tailscale auth key is required"
         exit 1
@@ -450,7 +461,7 @@ fetch_secrets_from_openbao() {
     local secret_path="secret/bootstrap/${HARDWARE_UUID}/b2"
 
     # Only try if Tailscale is running (OpenBao is accessed over tailnet)
-    if ! systemctl is-active --quiet tailscale; then
+    if ! systemctl is-active --quiet tailscaled; then
         return 1
     fi
 
@@ -511,7 +522,7 @@ if [[ -n "$B2_BUCKET" && -n "$B2_ACCOUNT_ID" ]]; then
     SECRETS_ALREADY_AVAILABLE="$SOPS_SECRETS_AVAILABLE"
     if $SOPS_SECRETS_AVAILABLE; then
         echo "Using backup secrets supplied by SOPS through the process environment."
-    elif [[ -n "${OPENBAO_TOKEN:-}" ]] && command -v tailscale &>/dev/null && systemctl is-active --quiet tailscale; then
+    elif [[ -n "${OPENBAO_TOKEN:-}" ]] && command -v tailscale &>/dev/null && systemctl is-active --quiet tailscaled; then
         echo "Attempting to fetch B2 secrets from OpenBao..."
         if fetch_secrets_from_openbao; then
             SECRETS_ALREADY_AVAILABLE=true
@@ -1153,16 +1164,58 @@ else
     echo "Tailscale already installed"
 fi
 
-# Start Tailscale with SSH enabled (idempotent)
+# Tailscale's package installs the tailscaled unit. Keep the daemon enabled
+# across reboots and make service readiness an explicit prerequisite for both
+# already-enrolled and first-time nodes.
+if ! systemctl enable --now tailscaled >/dev/null 2>&1; then
+    echo "ERROR: Could not enable or start the tailscaled service"
+    echo "       Check: systemctl status tailscaled"
+    exit 1
+fi
+if ! systemctl is-active --quiet tailscaled; then
+    echo "ERROR: The tailscaled service is not active"
+    echo "       Check: systemctl status tailscaled"
+    exit 1
+fi
+
+# Start Tailscale with SSH enabled (idempotent). Auth keys are written to a
+# private, short-lived file because putting the key in a command argument
+# exposes it through process listings and audit tooling. Tailscale supports
+# the file: form for --auth-key and reads the file only during enrollment.
 if ! tailscale status &>/dev/null; then
     echo "Connecting to Tailscale..."
-    tailscale up --authkey="$TAILSCALE_AUTHKEY" --ssh
+    TAILSCALE_AUTHKEY_FILE=$(mktemp /run/tailscale-bootstrap-authkey.XXXXXX)
+    chmod 600 "$TAILSCALE_AUTHKEY_FILE"
+    if ! printf '%s' "$TAILSCALE_AUTHKEY" > "$TAILSCALE_AUTHKEY_FILE"; then
+        rm -f -- "$TAILSCALE_AUTHKEY_FILE"
+        unset TAILSCALE_AUTHKEY
+        echo "ERROR: Could not prepare the Tailscale authentication input"
+        exit 1
+    fi
+    if ! tailscale up --auth-key="file:$TAILSCALE_AUTHKEY_FILE" --ssh >/dev/null 2>&1; then
+        rm -f -- "$TAILSCALE_AUTHKEY_FILE"
+        unset TAILSCALE_AUTHKEY TAILSCALE_AUTHKEY_FILE
+        echo "ERROR: Tailscale authentication failed"
+        echo "       Verify the auth key is valid, pre-authorized, and not expired."
+        exit 1
+    fi
+    rm -f -- "$TAILSCALE_AUTHKEY_FILE"
+    unset TAILSCALE_AUTHKEY TAILSCALE_AUTHKEY_FILE
 else
     echo "Tailscale already connected"
 fi
 
-echo "Tailscale status:"
-tailscale status
+TAILSCALE_STATUS=$(tailscale status 2>/dev/null) || {
+    echo "ERROR: Tailscale is not reachable after enrollment"
+    echo "       Check: systemctl status tailscaled"
+    exit 1
+}
+if ! grep -Eq '(^|[[:space:]])(100\.|fd7a:)' <<< "$TAILSCALE_STATUS"; then
+    echo "ERROR: Tailscale daemon is running but the node is not connected to the mesh"
+    echo "       Check: tailscale status"
+    exit 1
+fi
+echo "Tailscale status: connected"
 
 echo ""
 echo "=== Step 11: Installing Cloudflared ==="

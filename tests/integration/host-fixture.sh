@@ -67,6 +67,10 @@ case "$name" in
                 cat "$state/keys/$key_name"
                 ;;
             https://tailscale.com/install.sh)
+                if [[ ${BOOTSTRAP_TEST_TAILSCALE_INSTALL_FAIL:-false} == true ]]; then
+                    echo 'fixture: Tailscale installer unavailable' >&2
+                    exit 1
+                fi
                 cat <<'TAILSCALE_INSTALL'
 mkdir -p /usr/local/bin
 cat > /usr/local/bin/tailscale <<'TAILSCALE'
@@ -86,7 +90,16 @@ case "${1:-}" in
         echo 'Logged out.' >&2
         exit 1
         ;;
+    down)
+        rm -f "$state"
+        exit 0
+        ;;
     up)
+        printf '%s\n' "$*" >> /var/lib/bootstrap-test/tailscale-up-args.log
+        if [[ ${BOOTSTRAP_TEST_TAILSCALE_UP_FAIL:-false} == true ]]; then
+            echo 'fixture: enrollment rejected' >&2
+            exit 1
+        fi
         touch "$state"
         exit 0
         ;;
@@ -132,12 +145,40 @@ CLAUDE_INSTALL
         ;;
     systemctl)
         case "${1:-}" in
+            enable)
+                unit="${3:-${2:-}}"
+                if [[ "$unit" == tailscaled ]]; then
+                    if [[ ${BOOTSTRAP_TEST_TAILSCALE_SERVICE_FAIL:-false} == true ]]; then
+                        echo 'fixture: tailscaled failed to start' >&2
+                        exit 1
+                    fi
+                    touch "$state/tailscaled-enabled" "$state/tailscaled-active"
+                fi
+                exit 0
+                ;;
             is-active)
                 unit="${3:-${2:-}}"
+                if [[ "$unit" == tailscaled && -f "$state/tailscaled-active" ]]; then
+                    exit 0
+                fi
                 if [[ "$unit" == tailscale && -f "$state/tailscale-connected" ]]; then
                     exit 0
                 fi
                 exit 1
+                ;;
+            is-enabled)
+                unit="${3:-${2:-}}"
+                [[ "$unit" == tailscaled && -f "$state/tailscaled-enabled" ]]
+                ;;
+            stop)
+                unit="${2:-}"
+                [[ "$unit" != tailscaled ]] || rm -f "$state/tailscaled-active"
+                exit 0
+                ;;
+            start)
+                unit="${2:-}"
+                [[ "$unit" != tailscaled ]] || touch "$state/tailscaled-active"
+                exit 0
                 ;;
             list-unit-files)
                 # Make the optional systemd-resolved branch a no-op. DNS is

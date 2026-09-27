@@ -72,6 +72,7 @@ docker exec "$CONTAINER" bash /src/tests/integration/host-fixture.sh \
     /src/hosts/ex44/bootstrap.sh
 
 first_input="$TMP/first-input"
+tailscale_auth_key='tskey-auth-integration'
 cat > "$first_input" <<'INPUT'
 bootstrap-test
 
@@ -135,6 +136,23 @@ run_bootstrap_with_sops() {
         cat "$output" >&2
         exit 1
     }
+}
+
+run_bootstrap_expect_failure() {
+    local label=$1
+    local input=$2
+    local environment=${3:-BOOTSTRAP_TEST_TAILSCALE_UP_FAIL=true}
+    local output="$TMP/$label-output"
+
+    echo "Running bootstrap ($label), expecting failure..."
+    if docker exec -i -e "$environment" \
+        "$CONTAINER" bash /test/bootstrap-under-test.sh \
+        < "$input" > "$output" 2>&1; then
+        echo "ASSERTION FAILED: bootstrap unexpectedly succeeded during $label" >&2
+        cat "$output" >&2
+        exit 1
+    fi
+    printf '%s\n' "$output"
 }
 
 partial_sops_output="$TMP/partial-sops-output"
@@ -365,6 +383,17 @@ assert_container 'Tailscale is connected' \
     'tailscale status | grep -Eq "^100\\.64\\."'
 assert_container 'Tailscale identity is available through the JSON status endpoint' \
     "tailscale status --json | grep -Fq 'bootstrap-test.tailnet.ts.net.'"
+assert_container 'tailscaled is enabled and active' \
+    'systemctl is-enabled --quiet tailscaled && systemctl is-active --quiet tailscaled'
+assert_container 'Tailscale enrollment uses a private file reference' \
+    "grep -Fq -- '--auth-key=file:' /var/lib/bootstrap-test/tailscale-up-args.log && \\
+     ! grep -Fq -- 'tskey-' /var/lib/bootstrap-test/tailscale-up-args.log"
+if grep -Fq -- "$tailscale_auth_key" "$TMP/first-output"; then
+    echo 'ASSERTION FAILED: Tailscale auth key appeared in bootstrap output' >&2
+    exit 1
+fi
+assert_container 'Tailscale auth input is not persisted in bootstrap state' \
+    "! grep -R -Fq -- 'tskey-' /etc/bootstrap /var/lib/tailscale"
 assert_container 'coding workspace has isolated directories' \
     '[[ -d /home/coding/.tmp && -d /home/coding/.cache && -d /home/coding/workspace ]]'
 assert_container 'both configured users have private, user-owned workspaces' \
@@ -533,5 +562,63 @@ grep -Fq 'SSH protocol and cipher policy:' "$verify_output"
 grep -Fq 'fail2ban enforces three-attempt UFW bans:' "$verify_output"
 grep -Fq 'auditd watches network configuration:' "$verify_output"
 grep -Fq 'Kernel pointer exposure restricted:' "$verify_output"
+
+# A failed enrollment must stop the run with an actionable, non-secret
+# diagnostic and remove the temporary auth-key file. This run deliberately
+# starts from a logged-out client after the successful convergence checks.
+docker exec "$CONTAINER" tailscale down
+failure_input="$TMP/tailscale-failure-input"
+cat > "$failure_input" <<'INPUT'
+
+tskey-auth-failure
+
+test-application-key
+test-password
+test-password
+
+INPUT
+failure_output=$(run_bootstrap_expect_failure tailscale-failure "$failure_input")
+failure_log=${failure_output##*$'\n'}
+grep -Fq 'ERROR: Tailscale authentication failed' "$failure_log" || {
+    echo 'ASSERTION FAILED: failed Tailscale enrollment produced the wrong diagnostic' >&2
+    cat "$failure_log" >&2
+    exit 1
+}
+if grep -Fq -- 'tskey-' "$failure_log"; then
+    echo 'ASSERTION FAILED: failed Tailscale enrollment exposed an auth key' >&2
+    cat "$failure_log" >&2
+    exit 1
+fi
+assert_container 'failed Tailscale enrollment removes the temporary auth-key file' \
+    '! compgen -G "/run/tailscale-bootstrap-authkey.*" >/dev/null'
+
+service_failure_output=$(run_bootstrap_expect_failure tailscale-service-failure \
+    "$failure_input" BOOTSTRAP_TEST_TAILSCALE_SERVICE_FAIL=true)
+service_failure_log=${service_failure_output##*$'\n'}
+grep -Fq 'ERROR: Could not enable or start the tailscaled service' "$service_failure_log" || {
+    echo 'ASSERTION FAILED: Tailscale service failure produced the wrong diagnostic' >&2
+    cat "$service_failure_log" >&2
+    exit 1
+}
+if grep -Fq -- 'tskey-' "$service_failure_log"; then
+    echo 'ASSERTION FAILED: Tailscale service failure exposed an auth key' >&2
+    cat "$service_failure_log" >&2
+    exit 1
+fi
+
+docker exec "$CONTAINER" rm -f /usr/local/bin/tailscale
+install_failure_output=$(run_bootstrap_expect_failure tailscale-install-failure \
+    "$failure_input" BOOTSTRAP_TEST_TAILSCALE_INSTALL_FAIL=true)
+install_failure_log=${install_failure_output##*$'\n'}
+grep -Fq 'ERROR: Tailscale installation failed' "$install_failure_log" || {
+    echo 'ASSERTION FAILED: Tailscale installation failure produced the wrong diagnostic' >&2
+    cat "$install_failure_log" >&2
+    exit 1
+}
+if grep -Fq -- 'tskey-' "$install_failure_log"; then
+    echo 'ASSERTION FAILED: Tailscale installation failure exposed an auth key' >&2
+    cat "$install_failure_log" >&2
+    exit 1
+fi
 
 echo 'Bootstrap integration and idempotence tests passed.'

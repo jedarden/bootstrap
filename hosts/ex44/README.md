@@ -133,7 +133,7 @@ On the first run the script asks for the following, in order:
 | Users | Press Enter at the first username prompt to create the defaults `coding` and `trading`. Otherwise enter one or more lowercase usernames matching `[a-z_][a-z0-9_-]*`, then press Enter on an empty prompt to finish. |
 | B2 bucket, path prefix, account/key ID | The path prefix defaults to `hetzner-ex44`; the script appends the machine’s hardware UUID to form the restic repository path. Backup is enabled only when both the bucket and account/key ID are non-empty; leave them empty to skip it. |
 | Reboot after bootstrap | `y` enables an automatic reboot after a five-second delay; the default is `N`. |
-| Tailscale auth key | Required unless `tailscale status` already succeeds. |
+| Tailscale auth key | Required unless `tailscale status` already succeeds. The prompt does not echo the key; it is never saved in `/etc/bootstrap/config`. |
 | Cloudflared token | Optional; an empty response skips cloudflared. |
 | B2 application key and encryption password | Asked only when both a bucket and account/key ID were supplied, unless valid OpenBao data supplies both secrets. The password is confirmed interactively. |
 | Restore from backup | Asked only when the configured restic repository already has snapshots. `y` restores `/home` and `/var/lib/tailscale` after setup; this overwrites those paths. |
@@ -152,6 +152,31 @@ system state: it rewrites the SSH hardening configuration, resets and
 re-enables UFW rules, refreshes user `authorized_keys`, and reinstalls or
 updates missing software. Review the restore prompt carefully before
 accepting it.
+
+### Tailscale installation and lifecycle
+
+If `tailscale` is absent, bootstrap downloads and runs Tailscale's official
+installer. It then enables and starts the `tailscaled` system service and
+requires the service to be active before continuing. The enrollment command
+enables Tailscale SSH (`--ssh`) and the script verifies that `tailscale status`
+reports a mesh address (`100.64.0.0/10` or `fd7a::/48`) before proceeding.
+
+On a new or logged-out host, enter the auth key at the hidden prompt. The key
+is written to a root-only temporary file and passed to Tailscale using its
+`file:` auth-key input; it is removed immediately after enrollment and is not
+written to configuration, logs, or command arguments. See Tailscale's
+[secure auth-key guidance](https://tailscale.com/docs/features/access-control/auth-keys/how-to/secure-auth-keys)
+and [`tailscale up` reference](https://tailscale.com/docs/reference/tailscale-cli/up).
+
+If installation, service startup, authentication, or the post-enrollment
+connectivity check fails, bootstrap stops with an error and does not claim
+completion. Check `systemctl status tailscaled` and `tailscale status`, then
+rerun after fixing the reported condition. The rescue-network SSH rules are
+installed before this step so the host retains the documented recovery path.
+
+On a rerun, an already-connected node does not ask for another auth key;
+bootstrap still re-enables and checks `tailscaled`. A stopped or logged-out
+node asks for a fresh key, and a previous key is never reused.
 
 ### After Bootstrap
 

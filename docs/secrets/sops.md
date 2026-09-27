@@ -161,18 +161,44 @@ git diff --check
 ```
 
 For Ansible, store the variables required by `bootstrap_restic_env` in an
-encrypted YAML file outside `ansible/group_vars/` and pass it through a SOPS
-FIFO. The FIFO avoids leaving decrypted YAML on disk:
+encrypted YAML file outside `ansible/group_vars/`. When backup management is
+enabled, the top-level mapping must contain `bootstrap_backup_enabled: true`
+and non-empty `B2_ACCOUNT_ID`, `B2_ACCOUNT_KEY`, `RESTIC_REPOSITORY`, and
+`RESTIC_PASSWORD` entries under `bootstrap_restic_env`:
 
-```bash
-sops exec-file secrets/ansible/ex44.sops.yml \
-  'ansible-playbook ansible/playbooks/check-drift.yml --limit ex44 --diff -e @{}'
+```yaml
+bootstrap_backup_enabled: true
+bootstrap_restic_env:
+  B2_ACCOUNT_ID: <b2-account-id>
+  B2_ACCOUNT_KEY: <b2-account-key>
+  RESTIC_REPOSITORY: <restic-repository>
+  RESTIC_PASSWORD: <restic-password>
 ```
 
-Use the same form for `playbooks/drift.yml` after reviewing check mode. Do
-not use `--no-fifo` unless the consumer genuinely needs a seekable file; if
-it is required, ensure the temporary file is mode 0600 and is destroyed
-immediately after the command exits.
+Use the repository wrapper so the decrypted YAML is passed through a SOPS
+FIFO and is never saved as a regular controller file:
+
+```bash
+ansible/run-drift.sh check --limit ex44 --diff
+```
+
+Use `ansible/run-drift.sh apply --limit ex44 --diff` after reviewing check
+mode. The wrapper requires exactly one `secrets/ansible/*.sops.yml` file; set
+`SOPS_ANSIBLE_VARS=/path/to/host.sops.yml` when a checkout contains multiple
+host files. It rejects other suffixes and never accepts a plaintext YAML
+file. Do not use `--no-fifo`: the wrapper leaves SOPS responsible for
+removing the FIFO after both successful and failed Ansible runs.
+
+Failure behavior is intentionally fail-closed. A missing or ambiguous SOPS
+file, unavailable SOPS/Ansible binary, invalid SOPS metadata, decryption
+failure, or invalid variable contract stops before the backup secret file is
+created. A playbook failure is returned to the operator, and SOPS removes its
+FIFO before returning. Ansible's `no_log` protection prevents secret values
+from appearing in the contract assertion or `/etc/restic/b2.env` template
+task output. The managed host receives only the runtime file required by
+restic, `/etc/restic/b2.env`, owned by root with mode `0600`; the encrypted
+input, SOPS FIFO, age identity, and decrypted YAML never exist on the managed
+host.
 
 ## Bootstrap consumption
 
@@ -347,6 +373,7 @@ bash -n hosts/ex44/bootstrap.sh
 scripts/definition-of-done.sh --fast
 tests/sops-age-tooling-test.sh
 tests/sops-recovery-drill.sh
+tests/ansible-sops-workflow-test.sh
 ```
 
 The tooling test checks the exact supported versions, encrypts and decrypts
@@ -356,6 +383,10 @@ diagnostics in a mode-0700 temporary directory. It prints no key or fixture
 value. The recovery drill additionally proves that the offline identity is
 available with safe permissions and still decrypts both real file formats
 after the primary path is isolated. The clean-extraction definition-of-done
-check must pass before a change is pushed. A successful `sops filestatus`
+The Ansible workflow test uses disposable SOPS and Ansible stubs to verify
+the FIFO command contract, cleanup after both success and failure, the
+required mode-0600 runtime destination, and the absence of ordinary
+plaintext files under `secrets/ansible/`. This check must pass before a
+change is pushed. A successful `sops filestatus`
 proves the file has SOPS metadata; it does not prove that every intended
 recipient can still decrypt it.

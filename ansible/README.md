@@ -56,15 +56,34 @@ ${EDITOR:-vi} inventory/hosts.yml
 Put secret values such as `bootstrap_restic_env` in the repository's
 SOPS-encrypted YAML workflow described in [`../docs/secrets/sops.md`](../docs/secrets/sops.md),
 or another secret-management-backed variable source. Do not put credentials
-in the repository, inventory example, command arguments, or logs. When using
-SOPS, pass the decrypted YAML through `sops exec-file` and Ansible's `-e @{}`
-FIFO form; do not place a plaintext file under `group_vars/`.
+in the repository, inventory example, command arguments, or logs. The
+repository wrapper selects exactly one `secrets/ansible/*.sops.yml` file and
+passes it to Ansible through a SOPS FIFO; do not place a plaintext file under
+`group_vars/`.
+
+When `bootstrap_backup_enabled` is true, the encrypted YAML must be a
+top-level Ansible variable mapping containing non-empty values for all four
+runtime fields below. Non-secret settings such as users and firewall rules
+remain in inventory or another non-secret variable source:
+
+```yaml
+bootstrap_backup_enabled: true
+bootstrap_restic_env:
+  B2_ACCOUNT_ID: <b2-account-id>
+  B2_ACCOUNT_KEY: <b2-account-key>
+  RESTIC_REPOSITORY: <restic-repository>
+  RESTIC_PASSWORD: <restic-password>
+```
+
+The role validates this contract before creating `/etc/restic/b2.env`; a
+missing, empty, or malformed value fails the run without writing the runtime
+secret file.
 
 Preview and apply the complete reconciliation with an explicit limit:
 
 ```bash
-ansible-playbook playbooks/check-drift.yml --limit ex44 --diff
-ansible-playbook playbooks/drift.yml --limit ex44 --diff
+./run-drift.sh check --limit ex44 --diff
+./run-drift.sh apply --limit ex44 --diff
 ```
 
 The `check-drift.yml` playbook always runs in check mode. It is safe to run
@@ -77,9 +96,9 @@ After an apply, run the check twice. The second run should report
 `changed=0` for every host and no unexpected diff:
 
 ```bash
-ansible-playbook playbooks/drift.yml --limit ex44 --diff
-ansible-playbook playbooks/drift.yml --limit ex44 --check --diff
-ansible-playbook playbooks/drift.yml --limit ex44 --check --diff
+./run-drift.sh apply --limit ex44 --diff
+./run-drift.sh check --limit ex44 --diff
+./run-drift.sh check --limit ex44 --diff
 ```
 
 The repository-only syntax gate is:

@@ -1,15 +1,18 @@
 ---
-- name: Validate backup variables before writing secret material
+- name: Validate the encrypted backup variable contract
   ansible.builtin.assert:
     that:
-      - bootstrap_restic_env | length > 0
-      - bootstrap_restic_env.B2_ACCOUNT_ID is defined
-      - bootstrap_restic_env.B2_ACCOUNT_KEY is defined
-      - bootstrap_restic_env.RESTIC_REPOSITORY is defined
-      - bootstrap_restic_env.RESTIC_PASSWORD is defined
+      - bootstrap_restic_env is mapping
+      - bootstrap_restic_env.B2_ACCOUNT_ID | default('') | string | length > 0
+      - bootstrap_restic_env.B2_ACCOUNT_KEY | default('') | string | length > 0
+      - bootstrap_restic_env.RESTIC_REPOSITORY | default('') | string | length > 0
+      - bootstrap_restic_env.RESTIC_PASSWORD | default('') | string | length > 0
     fail_msg: >-
-      Set bootstrap_restic_env from an encrypted inventory variable before
-      enabling bootstrap_backup_enabled.
+      The SOPS Ansible variables must define non-empty
+      bootstrap_restic_env.B2_ACCOUNT_ID, B2_ACCOUNT_KEY,
+      RESTIC_REPOSITORY, and RESTIC_PASSWORD before enabling
+      bootstrap_backup_enabled.
+  no_log: true
   when: bootstrap_backup_enabled | bool
 
 - name: Install restic for managed backups

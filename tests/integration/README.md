@@ -22,5 +22,7 @@ paths, and state it produces. It intentionally does not call --verify; that
 is a separate read-only production check.
 
 Requirements: Docker with permission to run privileged containers and network
-access to pull debian:12-slim when it is not already cached. Use --keep while
-diagnosing a failed disposable host.
+access to pull debian:12-slim when it is not already cached. If Docker is not
+reachable, the test reports `SKIP` so host-independent definition-of-done
+checks remain usable; set `BOOTSTRAP_TEST_REQUIRE_DOCKER=true` to make that
+environment a failure. Use --keep while diagnosing a failed disposable host.

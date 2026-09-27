@@ -41,10 +41,18 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-command -v docker >/dev/null || {
-    echo 'bootstrap integration tests require Docker' >&2
-    exit 2
+docker_is_available() {
+    command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1
 }
+
+if ! docker_is_available; then
+    if [[ ${BOOTSTRAP_TEST_REQUIRE_DOCKER:-false} == true ]]; then
+        echo 'bootstrap integration tests require a reachable Docker daemon' >&2
+        exit 2
+    fi
+    echo 'SKIP: bootstrap integration tests require a reachable Docker daemon' >&2
+    exit 0
+fi
 
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
     echo "Pulling disposable test image $IMAGE..."

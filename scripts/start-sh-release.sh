@@ -48,6 +48,7 @@ Usage:
   scripts/start-sh-release.sh release VERSION
   scripts/start-sh-release.sh rollback GIT-REF VERSION
   scripts/start-sh-release.sh manifest VERSION
+  scripts/start-sh-release.sh rotation-check OLD-KEY-ID NEW-KEY-ID
   scripts/start-sh-release.sh --check
   scripts/start-sh-release.sh distribution-check
   scripts/start-sh-release.sh publish
@@ -62,6 +63,9 @@ Commands:
                         archive, and check it.
   manifest VERSION     Re-sign the manifest for already-prepared release
                         artifacts. The signing key never belongs in Git.
+  rotation-check OLD-KEY-ID NEW-KEY-ID
+                        Validate that the prepared release is an overlap
+                        release signed by OLD-KEY-ID and trusting NEW-KEY-ID.
   --check               Verify syntax, generated-copy equality, and that the
                         current archive contents and all release metadata agree.
   distribution-check    Verify Forgejo main is mirrored to GitHub and that
@@ -182,6 +186,78 @@ extract_artifact_key_id() {
     printf '%s\n' "${line%\"}"
 }
 
+extract_trusted_key_count() {
+    local path=$1
+
+    python3 - "$path" <<'PY'
+import re
+import shlex
+import sys
+
+path = sys.argv[1]
+text = open(path, encoding="utf-8").read()
+counts = []
+for name in ("ARTIFACT_TRUSTED_KEY_IDS", "ARTIFACT_TRUSTED_PUBLIC_KEYS"):
+    match = re.search(rf"(?ms)^{name}=\((.*?)\)$", text)
+    if not match:
+        raise SystemExit(f"{path} is missing {name} array")
+    try:
+        entries = shlex.split(match.group(1), comments=False, posix=True)
+    except ValueError as exc:
+        raise SystemExit(f"{path} has malformed {name} array: {exc}")
+    if not entries:
+        raise SystemExit(f"{path} has an empty {name} array")
+    counts.append(len(entries))
+
+if counts[0] != counts[1]:
+    raise SystemExit(
+        f"{path} has {counts[0]} trusted key IDs but {counts[1]} trusted public keys"
+    )
+print(counts[0])
+PY
+}
+
+check_trusted_key_declarations() {
+    local path count other_count
+    count=$(extract_trusted_key_count "$START_SH") || die "invalid trusted-key declarations in $START_SH"
+    other_count=$(extract_trusted_key_count "$BOOTSTRAP_SH") || die "invalid trusted-key declarations in $BOOTSTRAP_SH"
+    [[ "$count" == "$other_count" ]] ||
+        die "start.sh and bootstrap.sh declare different trusted-key counts"
+}
+
+check_immutable_archives() {
+    local tracked path
+    while IFS= read -r tracked; do
+        [[ -n "$tracked" ]] || continue
+        path="$ROOT/$tracked"
+        [[ -f "$path" ]] ||
+            die "immutable bootstrap archive is missing: $tracked (historical archives must not be deleted)"
+    done < <(git -C "$ROOT" ls-files 'hosts/ex44/bootstrap-*.sh' 2>/dev/null || true)
+}
+
+check_rotation_release() {
+    local old_key_id=$1 new_key_id=$2 primary count
+    [[ "$old_key_id" =~ ^[A-Za-z0-9._-]+$ && "$new_key_id" =~ ^[A-Za-z0-9._-]+$ ]] ||
+        die "rotation key IDs must contain only letters, numbers, '.', '_', or '-'"
+    [[ "$old_key_id" != "$new_key_id" ]] ||
+        die "rotation requires distinct old and new key IDs"
+
+    check_release
+    primary=$(extract_artifact_key_id "$START_SH")
+    [[ "$primary" == "$old_key_id" ]] ||
+        die "overlap release must remain signed by old key $old_key_id (found $primary)"
+    [[ "$(extract_artifact_key_id "$BOOTSTRAP_SH")" == "$old_key_id" ]] ||
+        die "bootstrap.sh does not retain old signing key ID $old_key_id"
+    count=$(extract_trusted_key_count "$START_SH")
+    (( count >= 2 )) ||
+        die "overlap release must trust at least old and new keys"
+    grep -Fq "$new_key_id" "$START_SH" ||
+        die "start.sh does not embed new trusted key ID $new_key_id"
+    grep -Fq "$new_key_id" "$BOOTSTRAP_SH" ||
+        die "bootstrap.sh does not embed new trusted key ID $new_key_id"
+    echo "Rotation overlap verified: signer=$old_key_id, next trusted key=$new_key_id, trusted-key-count=$count"
+}
+
 require_signing_key() {
     local signing_key=${ARTIFACT_SIGNING_KEY:-}
     [[ -n "$signing_key" && -f "$signing_key" ]] ||
@@ -284,6 +360,8 @@ check_artifact_manifest() {
 check_release() {
     bash -n "$START_SH"
     bash -n "$BOOTSTRAP_SH"
+    check_trusted_key_declarations
+    check_immutable_archives
     "$ROOT/scripts/check-secret-leakage.sh" --artifacts
     "$SYNC_SH" --check
     check_versions
@@ -520,6 +598,10 @@ case "${1:-}" in
         require_version "$2"
         write_artifact_manifest "$2"
         check_release
+        ;;
+    rotation-check)
+        [[ $# -eq 3 ]] || { usage >&2; exit 2; }
+        check_rotation_release "$2" "$3"
         ;;
     --check)
         [[ $# -eq 1 ]] || { usage >&2; exit 2; }

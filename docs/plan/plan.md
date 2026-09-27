@@ -936,5 +936,19 @@ automation requires `ARTIFACT_SIGNING_KEY` explicitly.
 - Older immutable bootstrap archives remain verifiable because the manifest
   retains their digests; the current launcher only installs a newer signed
   launcher whose internal version agrees with the manifest.
-- Offline tests cover manifest tampering, payload tampering, stale artifacts,
-  signature failure, and failed atomic replacement without network access.
+- Rotation is a two-release migration. The transition release keeps the old
+  key as the primary signer and embeds both old and new trust anchors. It is
+  signed with the old private key and must remain deployed for at least 30
+  days and until the supported-host inventory has crossed it. The migration
+  release makes the new key primary, signs with the new private key, and
+  removes the old key only after that gate. The release helper's
+  `rotation-check` validates the transition shape; it cannot substitute for
+  host inventory or an out-of-band recovery path.
+- Immutable `bootstrap-<version>.sh` archives are never deleted. Manifest
+  generation includes every tracked archive and the release check fails if a
+  tracked historical archive is missing, preserving both historical-commit
+  verification and current-manifest auditing.
+- Offline tests cover old and new signatures during overlap, old-signature
+  rejection after retirement, stale trust anchors, missing keys, unsigned
+  manifests, manifest tampering, payload tampering, stale artifacts,
+  signature failure, and failed atomic replacement.

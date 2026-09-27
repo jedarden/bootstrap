@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 # Regenerates the start.sh heredoc embedded in bootstrap.sh (Step 13, "Setting
-# Up start.sh for Users") from the canonical, independently-runnable
-# start.sh that sits next to this script.
+# Up start.sh for Users") and bootstrap.sh's top-level trust-anchor block from
+# the canonical, independently-runnable start.sh that sits next to this
+# script.
 #
-# Run this every time start.sh changes, before committing bootstrap.sh.
+# Run this every time start.sh changes, before committing bootstrap.sh. This is
+# especially important during signing-key rotation: bootstrap authentication
+# and launcher self-update must receive the same overlap key set.
 # See docs/plan/plan.md ADR-1: these two copies drifted (and the embedded
 # heredoc extraction into the standalone file separately got corrupted) when
 # they were hand-maintained; this script is the enforcement mechanism for
@@ -42,6 +45,10 @@ bootstrap = (repo_dir / "bootstrap.sh").read_text()
 version_file = (repo_dir / "start.sh.version").read_text()
 
 version_pattern = re.compile(r'^START_SH_VERSION="([0-9]+\.[0-9]+\.[0-9]+)"$', re.MULTILINE)
+trust_pattern = re.compile(
+    r'^ARTIFACT_TRUSTED_KEY_ID=.*?^ARTIFACT_TRUSTED_PUBLIC_KEYS=[^\n]*\n',
+    re.MULTILINE | re.DOTALL,
+)
 
 
 def extract_version(text, label):
@@ -51,8 +58,16 @@ def extract_version(text, label):
     return matches[0]
 
 
+def extract_trust_block(text, label):
+    match = trust_pattern.search(text)
+    if match is None:
+        sys.exit(f"ERROR: could not find the artifact trust-anchor block in {label}")
+    return match.group(0)
+
+
 standalone_version = extract_version(start_sh, "start.sh")
 embedded_version = extract_version(bootstrap, "bootstrap.sh embedded start.sh")
+canonical_trust_block = extract_trust_block(start_sh, "start.sh")
 version_lines = version_file.splitlines()
 if len(version_lines) != 1 or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version_lines[0]):
     sys.exit("ERROR: start.sh.version must contain exactly one MAJOR.MINOR.PATCH line")
@@ -86,26 +101,41 @@ body_end = end_idx + 1  # keep the newline before STARTSH
 
 # Extract current embedded copy
 current_embedded = bootstrap[body_start:body_end]
+bootstrap_prefix = bootstrap[:body_start]
+top_level_match = trust_pattern.search(bootstrap_prefix)
+if top_level_match is None:
+    sys.exit("ERROR: could not find the top-level artifact trust-anchor block in bootstrap.sh")
+current_top_level_trust = top_level_match.group(0)
 
 # Check mode: compare and exit without writing anything
 if os.environ.get('CHECK_MODE') == 'true':
-    if start_sh == current_embedded:
+    if start_sh == current_embedded and canonical_trust_block == current_top_level_trust:
         sys.exit(0)  # In sync, silent success
 
-    print("ERROR: bootstrap.sh's embedded start.sh copy is out of sync with start.sh", file=sys.stderr)
+    print("ERROR: bootstrap.sh's launcher or trust-anchor copy is out of sync with start.sh", file=sys.stderr)
     print("Run: ./sync-start-sh.sh (from this directory), then commit both files together", file=sys.stderr)
     print("", file=sys.stderr)
-    for line in difflib.unified_diff(
-        current_embedded.splitlines(keepends=True),
-        start_sh.splitlines(keepends=True),
-        fromfile="bootstrap.sh (embedded copy)",
-        tofile="start.sh (canonical)",
-    ):
-        sys.stderr.write(line if line.endswith("\n") else line + "\n")
+    if start_sh != current_embedded:
+        for line in difflib.unified_diff(
+            current_embedded.splitlines(keepends=True),
+            start_sh.splitlines(keepends=True),
+            fromfile="bootstrap.sh (embedded copy)",
+            tofile="start.sh (canonical)",
+        ):
+            sys.stderr.write(line if line.endswith("\n") else line + "\n")
+    if canonical_trust_block != current_top_level_trust:
+        for line in difflib.unified_diff(
+            current_top_level_trust.splitlines(keepends=True),
+            canonical_trust_block.splitlines(keepends=True),
+            fromfile="bootstrap.sh (top-level trust anchors)",
+            tofile="start.sh (trust anchors)",
+        ):
+            sys.stderr.write(line if line.endswith("\n") else line + "\n")
     sys.exit(1)
 
 # Sync mode: update the file
-new_bootstrap = bootstrap[:body_start] + start_sh + bootstrap[body_end:]
+new_prefix = bootstrap_prefix[:top_level_match.start()] + canonical_trust_block + bootstrap_prefix[top_level_match.end():]
+new_bootstrap = new_prefix + start_sh + bootstrap[body_end:]
 
 new_embedded_version = extract_version(new_bootstrap, "generated bootstrap.sh embedded start.sh")
 if new_embedded_version != standalone_version:

@@ -84,11 +84,31 @@ for filename in sys.argv[1:3]:
     start = text.index(begin)
     finish = text.index(end, start) + len(end)
     path.write_text(text[:start] + replacement + text[finish:])
+
+# Start with a realistic overlap set. Only the canonical launcher is edited;
+# sync-start-sh.sh must propagate it to bootstrap.sh's top-level verifier and
+# embedded launcher.
+path = pathlib.Path(sys.argv[1])
+text = path.read_text()
+text = text.replace(
+    'ARTIFACT_TRUSTED_KEY_IDS=("$ARTIFACT_TRUSTED_KEY_ID")',
+    'ARTIFACT_TRUSTED_KEY_IDS=("$ARTIFACT_TRUSTED_KEY_ID" "bootstrap-rsa-rotation-test")',
+)
+text = text.replace(
+    'ARTIFACT_TRUSTED_PUBLIC_KEYS=("$ARTIFACT_TRUSTED_PUBLIC_KEY")',
+    'ARTIFACT_TRUSTED_PUBLIC_KEYS=("$ARTIFACT_TRUSTED_PUBLIC_KEY" "$ARTIFACT_TRUSTED_PUBLIC_KEY")',
+)
+path.write_text(text)
 PY
 
 (cd "$FIXTURE/hosts/ex44" && ./sync-start-sh.sh >/dev/null)
+grep -Fq 'bootstrap-rsa-rotation-test' "$FIXTURE/hosts/ex44/bootstrap.sh" ||
+    fail 'sync did not propagate the overlap key to bootstrap.sh'
 cp -p "$FIXTURE/hosts/ex44/bootstrap.sh" "$FIXTURE/hosts/ex44/bootstrap-1.3.1.sh"
 (cd "$FIXTURE" && scripts/start-sh-release.sh manifest 1.3.1 >/dev/null)
+(cd "$FIXTURE" && scripts/start-sh-release.sh rotation-check \
+    bootstrap-rsa-2026-09 bootstrap-rsa-rotation-test >/dev/null) ||
+    fail 'rotation-check rejected the prepared overlap release'
 
 git -C "$FIXTURE" init -q -b main
 git -C "$FIXTURE" config user.name release-test
@@ -96,6 +116,14 @@ git -C "$FIXTURE" config user.email release-test@example.invalid
 git -C "$FIXTURE" add README.md scripts/check-host-parity.sh scripts/start-sh-release.sh hosts/ex44
 git -C "$FIXTURE" commit -q --no-verify -m base
 git -C "$FIXTURE" show HEAD:hosts/ex44/start.sh > "$KNOWN_GOOD_START"
+
+echo 'Checking historical archive deletion is rejected...'
+cp -p "$FIXTURE/hosts/ex44/bootstrap-1.3.1.sh" "$TMP/archive-retention-backup.sh"
+rm "$FIXTURE/hosts/ex44/bootstrap-1.3.1.sh"
+if (cd "$FIXTURE" && scripts/start-sh-release.sh --check >/dev/null 2>&1); then
+    fail 'release check accepted deletion of an immutable historical archive'
+fi
+mv "$TMP/archive-retention-backup.sh" "$FIXTURE/hosts/ex44/bootstrap-1.3.1.sh"
 
 git init --bare -q "$FORGEJO_BARE"
 git init --bare -q "$GITHUB_BARE"

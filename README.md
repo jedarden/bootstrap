@@ -139,13 +139,58 @@ offline, malformed, stale, unsigned, or digest-mismatched response, bootstrap
 stops before trusting the artifact. `start.sh` keeps the existing launcher and
 continues to the selected agent when its update check fails.
 
-Key rotation uses an overlap release: add the new public key to the trusted
-key list in both launcher copies, publish that transition release signed by
-the old key, then move the manifest signer to the new key after deployed
-launchers have updated. Retain the old private key until the transition is
-confirmed, and publish a new key ID plus fingerprint in the release review.
-Never replace the only trusted key and signer in one release; already deployed
-launchers would correctly reject every update.
+### Signing-key rotation
+
+Rotation is a two-release migration. The primary
+`ARTIFACT_TRUSTED_KEY_ID`/`ARTIFACT_TRUSTED_PUBLIC_KEY` pair is the signer for
+the current manifest; `ARTIFACT_TRUSTED_KEY_IDS` and
+`ARTIFACT_TRUSTED_PUBLIC_KEYS` are parallel arrays, with the primary pair
+first. A manifest's `key_id` must select one of those embedded pairs, so a
+stale raw response cannot replace the trust anchor.
+
+1. Generate the new private key and public key outside Git. Record the new key
+   ID and its DER-SHA-256 fingerprint in the release review; never put the
+   private key in the repository or in a command argument.
+2. Prepare the transition release by editing only `hosts/ex44/start.sh`:
+   retain the old primary pair and append the new ID/public key to both trust
+   arrays. Run `hosts/ex44/sync-start-sh.sh` so the bootstrap copy receives the
+   same overlap set. Keep `keys/bootstrap-artifacts-signing.pub` as the old
+   public key and sign this release with the old private key.
+3. Before committing, run the structural rotation gate and the normal checks:
+
+   ```bash
+   ARTIFACT_SIGNING_KEY=/secure/path/old-signing-key.pem \
+     ./scripts/start-sh-release.sh release 1.3.2
+   ./scripts/start-sh-release.sh rotation-check \
+     bootstrap-rsa-2026-09 bootstrap-rsa-2026-10
+   ./scripts/start-sh-release.sh --check
+   tests/artifact-key-rotation-test.sh
+   ```
+
+   `rotation-check` requires the manifest to remain signed by the old key and
+   both launcher copies to embed the new key. It does not claim that hosts
+   have migrated; record the deployed-host inventory separately.
+4. Keep the overlap for at least 30 days and until every supported host has
+   crossed the transition release (or has an explicitly approved out-of-band
+   update). Retain the old private key until that migration check and the
+   first new-key release have both been verified. During overlap, both old and
+   new signatures are accepted; after retirement, old signatures must fail.
+5. Publish the migration release by making the new pair primary, replacing
+   the committed public key with the new public key, reducing both trust arrays
+   to the new pair, and signing with the new private key. Do not remove an
+   immutable `bootstrap-<version>.sh` archive. `manifest` generation retains
+   every archive tracked in Git, and the release check fails if a historical
+   archive is deleted.
+
+Historical verification remains available from the immutable historical Git
+commit using its manifest, signature, and then-current public key. The
+current manifest also retains the SHA-256 entries for those archives, so a
+new-key release can audit their bytes without changing them. A missing key,
+stale trust anchor, key-ID mismatch, or unsigned manifest fails closed and
+leaves an installed launcher in place. If the old key is compromised before
+overlap completes, do not publish a one-step replacement: use an
+out-of-band trusted host/bootstrap path to install a launcher carrying the
+new anchor.
 
 The check requires the release files, including the versioned archive and
 signed manifest, to be committed, confirms local `HEAD`

@@ -581,6 +581,13 @@ assert_file_contains 'restic repository uses the configured prefix' \
     /etc/restic/b2.env 'RESTIC_REPOSITORY="b2:test-bucket:test-prefix/'
 assert_runtime_secret_hygiene 'interactive credentials stay out of argv, process listings, logs, and generated artifacts' \
     'test-application-key' 'test-password'
+assert_container 'interactive bootstrap does not install SOPS or age runtime tools' \
+    '! command -v sops && ! command -v age && ! command -v age-keygen && \
+     ! grep -Eq "apt-get .* (sops|age|age-keygen)( |$)" /var/lib/bootstrap-test/commands.log'
+assert_container 'interactive bootstrap does not copy SOPS or age input files' \
+    '! find /etc /root /home /tmp /run /var/lib/bootstrap-test -xdev -type f \
+         \( -name "*.sops.env" -o -name "*.sops.yml" -o -name "keys.txt" \) \
+         -print -quit | grep -q .'
 assert_container 'rootless Docker prerequisites are installed' \
     'grep -Eq "apt-get.*uidmap.*dbus-user-session.*fuse-overlayfs.*rootlesskit.*slirp4netns" /var/lib/bootstrap-test/commands.log'
 assert_container 'rootless Docker has a subuid range' \
@@ -707,6 +714,13 @@ assert_output_excludes 'SOPS restic password is not printed' \
     "$TMP/sops-output" "$sops_restic_password"
 assert_runtime_secret_hygiene 'SOPS credentials stay out of argv, process listings, logs, and generated artifacts' \
     "$sops_b2_key" "$sops_restic_password"
+assert_container 'SOPS dotenv input is not copied to the provisioned host' \
+    '! find /etc /root /home /tmp /run /var/lib/bootstrap-test -xdev -type f \
+         -name "$(basename '"$sops_env"')" -print -quit | grep -q .'
+assert_container 'SOPS ciphertext and age identity files are absent from the host' \
+    '! find /etc /root /home /tmp /run /var/lib/bootstrap-test -xdev -type f \
+         \( -name "*.sops.env" -o -name "*.sops.yml" -o -name "keys.txt" \) \
+         -print -quit | grep -q .'
 
 first_snapshot=$(docker exec "$CONTAINER" /usr/local/bin/bootstrap-test-snapshot)
 

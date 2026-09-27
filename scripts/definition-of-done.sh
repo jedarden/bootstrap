@@ -25,6 +25,7 @@ case "${1:-}" in
         bash -n "$ROOT/tests/ansible-drift-acceptance-test.sh"
         bash -n "$ROOT/tests/secrets-gitignore-test.sh"
         bash -n "$ROOT/tests/ansible-sops-workflow-test.sh"
+        bash -n "$ROOT/tests/sops-environment-boundary-test.sh"
         bash -n "$ROOT/tests/sops-recovery-drill.sh"
         bash -n "$ROOT/tests/sops-contract-test.sh"
         bash -n "$ROOT/tests/openbao-owner-routing-test.sh"

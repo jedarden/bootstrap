@@ -208,7 +208,7 @@ variables to the one bootstrap process. For a checked-out repository:
 
 ```bash
 sops exec-env secrets/bootstrap/ex44.sops.env \
-  'exec bash hosts/ex44/bootstrap.sh'
+  'exec env -u SOPS_AGE_KEY -u SOPS_AGE_KEY_FILE -u SOPS_AGE_RECIPIENTS bash hosts/ex44/bootstrap.sh'
 ```
 
 For a fresh host, first download and authenticate the immutable bootstrap
@@ -218,13 +218,16 @@ Then the same process-environment contract works with the verified file:
 ```bash
 bootstrap_path=/root/bootstrap-1.3.1.sh
 sops exec-env secrets/bootstrap/ex44.sops.env \
-  "exec bash $bootstrap_path"
+  "exec env -u SOPS_AGE_KEY -u SOPS_AGE_KEY_FILE -u SOPS_AGE_RECIPIENTS bash $bootstrap_path"
 ```
 
-The operator's age private key and the SOPS ciphertext stay on the operator
-side. The target host receives only the normal interactive bootstrap input
-and, for the lifetime of that process, the two environment variables. The
-script does not save those SOPS-specific variables in `/etc/bootstrap/config`.
+The `env -u` boundary is required: `sops exec-env` inherits the operator
+environment, so the command must remove the age identity, identity-file path,
+and recipient variables before `bash` starts on the target. The operator's
+age private key and the SOPS ciphertext then stay on the operator side. The
+target host receives only the normal interactive bootstrap input and, for the
+lifetime of that process, the two decrypted application variables. The script
+does not save those SOPS-specific variables in `/etc/bootstrap/config`.
 It writes the resulting runtime B2/restic environment to
 `/etc/restic/b2.env` with mode `0600`, which is required by the existing backup
 jobs.
@@ -374,6 +377,7 @@ git diff --check
 bash -n hosts/ex44/bootstrap.sh
 scripts/definition-of-done.sh --fast
 tests/sops-age-tooling-test.sh
+tests/sops-environment-boundary-test.sh
 tests/sops-recovery-drill.sh
 tests/ansible-sops-workflow-test.sh
 ```
@@ -382,9 +386,13 @@ The tooling test checks the exact supported versions, encrypts and decrypts
 ephemeral data with both generated recipients, confirms an unrelated identity
 cannot decrypt, and keeps all private identities, plaintext, and command
 diagnostics in a mode-0700 temporary directory. It prints no key or fixture
-value. The recovery drill additionally proves that the offline identity is
-available with safe permissions and still decrypts both real file formats
-after the primary path is isolated. The clean-extraction definition-of-done
+value. The environment-boundary test runs an ephemeral identity through
+`sops exec-env` and proves that the child receives only the decrypted
+application values, not SOPS/age identity variables. The recovery drill
+additionally proves that the offline identity is available with safe
+permissions and still decrypts both real file formats after the primary path
+is isolated. The clean-extraction definition-of-done run must also pass before
+pushing the change.
 The Ansible workflow test uses disposable SOPS and Ansible stubs to verify
 the FIFO command contract, cleanup after both success and failure, the
 required mode-0600 runtime destination, and the absence of ordinary

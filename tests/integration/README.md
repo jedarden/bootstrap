@@ -22,9 +22,14 @@ timestamp in `/etc/bootstrap/config` so it does not obscure convergence.
 The credential-path runs also audit the live restic command argv and process
 list, captured output for non-interactive sources, command logs, temporary
 trees, and generated files. The SOPS, OpenBao, and interactive paths each
-receive this audit; OpenBao's header file is checked at mode `0600` and
-after-read removal, while the runtime `/etc/restic/b2.env` destination is the
-only deliberate secret-bearing file.
+receive this audit, while
+`tests/sops-environment-boundary-test.sh` separately exercises the
+operator-to-bootstrap environment boundary. Together they verify that
+SOPS age identities, ciphertext/input files, and OpenBao tokens never cross
+the host boundary, that OpenBao's header file is mode `0600` and removed after
+the read, and that SOPS/age are not installed as bootstrap runtime tools. The
+runtime `/etc/restic/b2.env` destination is the only deliberate
+secret-bearing file.
 
 The container fixture provides deterministic doubles for package installation,
 systemd-only operations, the reboot boundary, Tailscale enrollment, Docker,

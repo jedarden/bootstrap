@@ -21,7 +21,6 @@ GITHUB_REPO_URL="${GITHUB_REPO_URL:-https://github.com/jedarden/bootstrap.git}"
 GITHUB_RAW_ROOT="${GITHUB_RAW_ROOT:-https://raw.githubusercontent.com/jedarden/bootstrap/main/hosts/ex44}"
 DISTRIBUTION_TIMEOUT_SECONDS="${DISTRIBUTION_TIMEOUT_SECONDS:-120}"
 DISTRIBUTION_POLL_SECONDS="${DISTRIBUTION_POLL_SECONDS:-2}"
-HOST_ARTIFACT_PARITY_ALLOW_SPLIT="${HOST_ARTIFACT_PARITY_ALLOW_SPLIT:-false}"
 DISTRIBUTION_TMP=
 
 readonly DISTRIBUTION_ARTIFACTS=(
@@ -64,10 +63,8 @@ VERSION must be MAJOR.MINOR.PATCH and must be greater than the current
 standalone version. A rollback therefore uses a new version even when its
 payload came from an older Git commit; deployed launchers only move forward.
 
-When hosts/lab exists as an intentional host-directory split, set
-HOST_ARTIFACT_PARITY_ALLOW_SPLIT=true for --check, publish, or
-distribution-check. The parity checker still validates each host's internal
-artifact and version agreement in that mode.
+The host artifact checker validates every host directory independently, so
+intentional host-specific splits do not require a special environment flag.
 USAGE
 }
 
@@ -164,22 +161,12 @@ check_versions() {
 }
 
 check_release() {
-    local -a parity_args=()
-    case "$HOST_ARTIFACT_PARITY_ALLOW_SPLIT" in
-        true|TRUE|1|yes|YES)
-            parity_args+=(--allow-split)
-            ;;
-        false|FALSE|0|no|NO) ;;
-        *)
-            die "HOST_ARTIFACT_PARITY_ALLOW_SPLIT must be true or false"
-            ;;
-    esac
     bash -n "$START_SH"
     bash -n "$BOOTSTRAP_SH"
     "$ROOT/scripts/check-secret-leakage.sh" --artifacts
     "$SYNC_SH" --check
     check_versions
-    "$ROOT/scripts/check-host-parity.sh" "${parity_args[@]}"
+    "$ROOT/scripts/check-host-parity.sh"
 }
 
 remote_main_commit() {

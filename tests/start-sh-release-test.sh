@@ -45,6 +45,7 @@ assert_release() {
 }
 
 mkdir -p "$FIXTURE/scripts" "$FIXTURE/hosts/ex44"
+cp -p "$ROOT/README.md" "$FIXTURE/"
 cp -p \
     "$ROOT/scripts/check-host-parity.sh" \
     "$ROOT/scripts/check-secret-leakage.sh" \
@@ -61,7 +62,7 @@ cp -p \
 git -C "$FIXTURE" init -q -b main
 git -C "$FIXTURE" config user.name release-test
 git -C "$FIXTURE" config user.email release-test@example.invalid
-git -C "$FIXTURE" add scripts/check-host-parity.sh scripts/start-sh-release.sh hosts/ex44
+git -C "$FIXTURE" add README.md scripts/check-host-parity.sh scripts/start-sh-release.sh hosts/ex44
 git -C "$FIXTURE" commit -q --no-verify -m base
 git -C "$FIXTURE" show HEAD:hosts/ex44/start.sh > "$KNOWN_GOOD_START"
 

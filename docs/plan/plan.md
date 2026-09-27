@@ -811,6 +811,9 @@ lives in docs/secrets/sops.md.
 
 ## ADR-12: 2026-09-27 — Cross-host bootstrap artifact parity is a rollout gate
 
+Status: superseded by ADR-13 for repositories containing intentionally
+divergent host directories.
+
 ### Context
 
 `ex44.jedarden.com` and `lab.ardenone.com` currently consume the same
@@ -850,3 +853,19 @@ embedded launcher, current archive, and archive manifest.
 - A future host split is explicit in both the directory layout and the
   command-line acknowledgment, while each split lineage retains its own
   bootstrap/version/archive integrity checks.
+
+## ADR-13: 2026-09-27 — Host artifact completeness supersedes cross-host parity
+
+ADR-12 established the initial ex44/lab byte-parity gate. That comparison is
+not suitable once a host directory intentionally carries different keys,
+backup targets, or hardening. The release invariant is the integrity of each
+host's own artifact lineage, not equality between unrelated hosts.
+
+`scripts/check-host-parity.sh` therefore discovers every immediate directory
+under `hosts/` and validates each one independently. It requires the current
+bootstrap, launcher, version marker, and at least one versioned bootstrap
+archive; checks syntax, embedded launcher equality, version metadata, and the
+current archive copy; and verifies that root `README.md` host links resolve
+and cover every host directory. `--staged` continues to inspect the Git index,
+while `--allow-split` remains only as a compatibility no-op for older command
+lines.

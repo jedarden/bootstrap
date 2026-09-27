@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# Exercise worktree/staged parity views and the explicit host-directory split
-# escape hatch in a disposable Git repository.
+# Exercise worktree/staged artifact views, independent host validation, and
+# README host-link checks in a disposable Git repository.
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/host-artifact-parity-test.XXXXXX")
@@ -26,6 +26,7 @@ expect_failure() {
 
 mkdir -p "$FIXTURE/scripts" "$FIXTURE/hosts/ex44"
 cp -p "$ROOT/scripts/check-host-parity.sh" "$FIXTURE/scripts/"
+cp -p "$ROOT/README.md" "$FIXTURE/"
 cp -p \
     "$ROOT/hosts/ex44/bootstrap.sh" \
     "$ROOT/hosts/ex44/start.sh" \
@@ -37,14 +38,14 @@ cp -p "$ROOT"/hosts/ex44/bootstrap-*.sh "$FIXTURE/hosts/ex44/"
 git -C "$FIXTURE" init -q -b main
 git -C "$FIXTURE" config user.name parity-test
 git -C "$FIXTURE" config user.email parity-test@example.invalid
-git -C "$FIXTURE" add scripts hosts/ex44
+git -C "$FIXTURE" add README.md scripts hosts/ex44
 git -C "$FIXTURE" commit -q --no-verify -m base
 
 echo 'Checking the shared canonical layout...'
 run_check --live
 run_check --staged
 
-echo 'Checking identical ex44/lab artifacts in the worktree and index...'
+echo 'Checking an intentionally divergent lab host in the worktree and index...'
 mkdir -p "$FIXTURE/hosts/lab"
 cp -p \
     "$FIXTURE/hosts/ex44/bootstrap.sh" \
@@ -53,28 +54,43 @@ cp -p \
     "$FIXTURE/hosts/ex44/sync-start-sh.sh" \
     "$FIXTURE/hosts/lab/"
 cp -p "$FIXTURE"/hosts/ex44/bootstrap-*.sh "$FIXTURE/hosts/lab/"
-git -C "$FIXTURE" add hosts/lab
+printf '%s\n' '| [hosts/lab/](./hosts/lab/) | Fixture-specific host split |' >> "$FIXTURE/README.md"
+printf '# lab-specific divergence\n' >> "$FIXTURE/hosts/lab/start.sh"
+(cd "$FIXTURE/hosts/lab" && ./sync-start-sh.sh >/dev/null)
+cp -p "$FIXTURE/hosts/lab/bootstrap.sh" "$FIXTURE/hosts/lab/bootstrap-1.3.1.sh"
+cp -p "$FIXTURE/hosts/lab/start.sh" "$TMP/lab-start-good.sh"
+git -C "$FIXTURE" add README.md hosts/lab
 run_check --live
 run_check --staged
 
-echo 'Checking that staged parity ignores an unstaged lab drift...'
+echo 'Checking that staged validation ignores an unstaged lab drift...'
 printf '# unstaged drift\n' >> "$FIXTURE/hosts/lab/start.sh"
 run_check --staged
 expect_failure --live
+cp -p "$TMP/lab-start-good.sh" "$FIXTURE/hosts/lab/start.sh"
 
-echo 'Checking that staged parity catches staged lab drift...'
-git -C "$FIXTURE" add hosts/lab/start.sh
-expect_failure --staged
+echo 'Checking missing required artifacts and archive metadata...'
+mv "$FIXTURE/hosts/lab/start.sh.version" "$TMP/lab-start.sh.version"
+expect_failure --live
+mv "$TMP/lab-start.sh.version" "$FIXTURE/hosts/lab/start.sh.version"
+cp -p "$FIXTURE/hosts/lab/bootstrap-1.3.1.sh" "$TMP/lab-archive.sh"
+sed -i '0,/^# Version: 1\.3\.1$/s//\# Version: 9.9.9/' \
+    "$FIXTURE/hosts/lab/bootstrap-1.3.1.sh"
+expect_failure --live
+mv "$TMP/lab-archive.sh" "$FIXTURE/hosts/lab/bootstrap-1.3.1.sh"
 
-echo 'Checking the intentional split override...'
-git -C "$FIXTURE" restore --staged hosts/lab/start.sh
-cp -p "$FIXTURE/hosts/ex44/start.sh" "$FIXTURE/hosts/lab/start.sh"
-printf '# intentional lab launcher change\n' >> "$FIXTURE/hosts/lab/start.sh"
-(cd "$FIXTURE/hosts/lab" && ./sync-start-sh.sh)
-cp -p "$FIXTURE/hosts/lab/bootstrap.sh" "$FIXTURE/hosts/lab/bootstrap-1.3.1.sh"
-git -C "$FIXTURE" add hosts/lab
-expect_failure --staged
+echo 'Checking missing README host links...'
+cp -p "$FIXTURE/README.md" "$TMP/README.md"
+sed -i '\|./hosts/lab/|d' "$FIXTURE/README.md"
+expect_failure --live
+mv "$TMP/README.md" "$FIXTURE/README.md"
+cp -p "$FIXTURE/README.md" "$TMP/README.md"
+sed -i 's|./hosts/lab/|./hosts/lab/missing/|' "$FIXTURE/README.md"
+expect_failure --live
+mv "$TMP/README.md" "$FIXTURE/README.md"
+
+echo 'Checking the backwards-compatible split override...'
 run_check --staged --allow-split
 run_check --live --allow-split
 
-echo 'host artifact parity tests passed.'
+echo 'host artifact completeness tests passed.'

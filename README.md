@@ -48,22 +48,22 @@ create the versioned bootstrap archive, and run the syntax/version checks:
 ./scripts/start-sh-release.sh --check
 ```
 
-Before rollout, compare the host artifacts from the current working tree and
-from the staged Git index:
+Before rollout, validate every host artifact set from the current working tree
+and from the staged Git index:
 
 ```bash
 ./scripts/check-host-parity.sh --live
 ./scripts/check-host-parity.sh --staged
 ```
 
-The check compares `bootstrap.sh`, `start.sh`, `start.sh.version`, and every
-`bootstrap-<version>.sh` archive for `ex44` and `lab`. While lab consumes the
-canonical `hosts/ex44/` directory, the single source makes parity implicit.
-If lab needs host-specific content, create `hosts/lab/` deliberately and use
-`--allow-split` only after reviewing that split; the check still validates
-each host's internal artifact and version agreement. The release helper uses
-the same gate, so set `HOST_ARTIFACT_PARITY_ALLOW_SPLIT=true` for its
-`--check`, `publish`, or `distribution-check` command only after that split.
+The check discovers every immediate directory under `hosts/` and independently
+validates its `bootstrap.sh`, `start.sh`, `start.sh.version`, and every
+`bootstrap-<version>.sh` archive. It checks syntax, embedded launcher
+equality, version metadata, current-archive equality, and that each host is
+linked from this README. Host directories are separate release lineages, so
+intentional host-specific content does not need to be byte-identical. The
+`--allow-split` option remains accepted for compatibility with older command
+lines but is no longer required.
 
 A release version is the same `MAJOR.MINOR.PATCH` in the standalone
 `START_SH_VERSION=...` assignment, the generated embedded copy,

@@ -1,15 +1,13 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# Compare the bootstrap release artifacts for the canonical ex44 host and a
-# staged host-specific lab directory.  With no hosts/lab directory, lab is
-# still consuming the one canonical ex44 directory and there is no second
-# copy to compare.
+# Validate the release artifacts in every host directory. Host directories
+# are independent lineages: a host-specific split is valid as long as that
+# host's own artifacts remain internally consistent.
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 SOURCE=worktree
-ALLOW_SPLIT=false
-TMP=$(mktemp -d "${TMPDIR:-/tmp}/bootstrap-host-parity.XXXXXX")
+TMP=$(mktemp -d "${TMPDIR:-/tmp}/bootstrap-host-artifacts.XXXXXX")
 trap 'rm -rf "$TMP"' EXIT
 
 die() {
@@ -22,15 +20,16 @@ usage() {
 Usage:
   scripts/check-host-parity.sh [--live|--staged] [--allow-split]
 
-Compare bootstrap.sh, start.sh, start.sh.version, and every versioned
-bootstrap archive under hosts/ex44 and hosts/lab.
+Validate bootstrap.sh, start.sh, start.sh.version, and every versioned
+bootstrap archive in every immediate directory under hosts/. The root
+README.md must link to every host directory, and every README host link must
+point to an existing host path.
 
 Options:
   --live          Read the current working tree (the default).
   --staged        Read the Git index, ignoring unstaged working-tree edits.
-  --allow-split   Permit differences when hosts/lab exists. Use only after
-                  intentionally creating the host-specific directory; each
-                  host's internal artifact/version checks still run.
+  --allow-split   Backwards-compatible no-op; host directories are validated
+                  independently and are not required to be byte-identical.
 USAGE
 }
 
@@ -53,7 +52,17 @@ source_dir_exists() {
     if [[ "$SOURCE" == worktree ]]; then
         [[ -d "$(source_path "$directory")" ]]
     else
-        git -C "$ROOT" ls-files --cached -- "$directory/" | grep -q .
+        [[ -n "$(git -C "$ROOT" ls-files --cached -- "$directory/*")" ]]
+    fi
+}
+
+source_path_exists() {
+    local relative=$1
+    if [[ "$SOURCE" == worktree ]]; then
+        [[ -e "$(source_path "$relative")" ]]
+    else
+        git -C "$ROOT" cat-file -e ":$relative" 2>/dev/null ||
+            [[ -n "$(git -C "$ROOT" ls-files --cached -- "$relative/*")" ]]
     fi
 }
 
@@ -78,14 +87,32 @@ source_is_executable() {
 }
 
 source_files() {
-    local directory=$1
+    local directory=$1 path prefix relative
     if [[ "$SOURCE" == worktree ]]; then
         find "$(source_path "$directory")" -mindepth 1 -maxdepth 1 -type f -printf '%P\n' | sort
-    else
-        git -C "$ROOT" ls-files --cached -- "$directory/" |
-            sed "s#^${directory}/##" |
-            sort
+        return
     fi
+
+    prefix="$directory/"
+    while IFS= read -r path; do
+        [[ "$path" == "$prefix"* ]] || continue
+        relative=${path#"$prefix"}
+        [[ "$relative" != */* ]] || continue
+        printf '%s\n' "$relative"
+    done < <(git -C "$ROOT" ls-files --cached -- "$prefix*")
+}
+
+source_host_dirs() {
+    local path
+    if [[ "$SOURCE" == worktree ]]; then
+        [[ -d "$ROOT/hosts" ]] || die "hosts/ is missing in the $SOURCE source"
+        find "$ROOT/hosts" -mindepth 1 -maxdepth 1 -type d -printf 'hosts/%f\n' | sort
+        return
+    fi
+
+    git -C "$ROOT" ls-files --cached -- 'hosts/*' |
+        awk -F/ 'NF >= 3 { print "hosts/" $2 }' |
+        sort -u
 }
 
 read_version_file() {
@@ -167,11 +194,11 @@ host_manifest() {
         esac
     done < "$all_files"
     sort -o "$output" "$output"
+
     for filename in bootstrap.sh start.sh start.sh.version; do
         grep -Fxq "$filename" "$output" ||
             die "$directory/$filename is missing in the $SOURCE source"
     done
-
     grep -Eq '^bootstrap-[0-9]+\.[0-9]+\.[0-9]+\.sh$' "$output" ||
         die "$directory has no versioned bootstrap archive"
 }
@@ -220,22 +247,60 @@ validate_host() {
     printf '%s\n' "$version"
 }
 
-compare_hosts() {
-    local ex44_manifest=$1 lab_manifest=$2 filename ex44_exec lab_exec
-    cmp -s "$ex44_manifest" "$lab_manifest" ||
-        die "ex44 and lab artifact manifests differ"
+check_readme_host_links() {
+    local readme="$TMP/README.md" host path
+    local links="$TMP/readme-host-links"
 
-    while IFS= read -r filename; do
-        cmp -s "$TMP/ex44/$filename" "$TMP/lab/$filename" ||
-            die "ex44 and lab artifacts differ: $filename"
-        ex44_exec=false
-        lab_exec=false
-        [[ -x "$TMP/ex44/$filename" ]] && ex44_exec=true
-        [[ -x "$TMP/lab/$filename" ]] && lab_exec=true
-        if [[ "$ex44_exec" != "$lab_exec" ]]; then
-            die "ex44 and lab executable modes differ: $filename"
-        fi
-    done < "$ex44_manifest"
+    source_file_exists README.md || die "README.md is missing in the $SOURCE source"
+    source_copy README.md "$readme"
+    python3 - "$readme" "$TMP/hosts" > "$links" <<'PY'
+import pathlib
+import posixpath
+import re
+import sys
+import urllib.parse
+
+readme = pathlib.Path(sys.argv[1])
+host_dirs = [line.strip() for line in pathlib.Path(sys.argv[2]).read_text().splitlines() if line.strip()]
+host_names = {directory.removeprefix("hosts/") for directory in host_dirs}
+link_pattern = re.compile(r"\[[^\]]*\]\(\s*(?:<([^>\n]+)>|([^\s)\n]+))")
+found = set()
+
+for match in link_pattern.finditer(readme.read_text()):
+    target = match.group(1) or match.group(2)
+    target = urllib.parse.unquote(target.strip())
+    parsed = urllib.parse.urlsplit(target)
+    if parsed.scheme or parsed.netloc or target.startswith("#"):
+        continue
+    target = parsed.path
+    if target.startswith("/"):
+        target = target[1:]
+    target = posixpath.normpath(target)
+    parts = [part for part in target.split("/") if part not in ("", ".")]
+    if not parts or parts[0] != "hosts":
+        continue
+    if len(parts) < 2:
+        raise SystemExit(f"README host link has no host directory: {target}")
+    host = parts[1]
+    if host not in host_names:
+        raise SystemExit(f"README links to missing host directory: {target}")
+    found.add(host)
+    print(f"{host}\t{target}")
+
+missing = sorted(host_names - found)
+if missing:
+    raise SystemExit("README is missing host links: " + ", ".join(missing))
+PY
+
+    while IFS=$'\t' read -r host path; do
+        [[ -n "$host" && -n "$path" ]] || continue
+        source_path_exists "$path" || die "README host link does not exist: $path"
+    done < "$links"
+
+    while IFS= read -r directory; do
+        host=${directory#hosts/}
+        grep -Fq "${host}"$'\t' "$links" || die "README is missing a link for $directory"
+    done < "$TMP/hosts"
 }
 
 while (($# > 0)); do
@@ -247,7 +312,8 @@ while (($# > 0)); do
             SOURCE=staged
             ;;
         --allow-split|--intentional-split)
-            ALLOW_SPLIT=true
+            # Kept so existing release commands remain compatible. There is
+            # no cross-host byte comparison to opt out of anymore.
             ;;
         --help|-h)
             usage
@@ -261,22 +327,22 @@ while (($# > 0)); do
     shift
 done
 
-EX44_MANIFEST="$TMP/ex44.manifest"
-LAB_MANIFEST="$TMP/lab.manifest"
-validate_host hosts/ex44 ex44 >/dev/null
+source_host_dirs > "$TMP/hosts"
+mapfile -t host_dirs < "$TMP/hosts"
+(( ${#host_dirs[@]} > 0 )) || die "hosts/ contains no host directories in the $SOURCE source"
 
-if ! source_dir_exists hosts/lab; then
-    echo "Host artifact parity verified: lab uses the canonical hosts/ex44 directory"
-    exit 0
+for directory in "${host_dirs[@]}"; do
+    label=${directory//\//_}
+    version_file="$TMP/$label.version"
+    validate_host "$directory" "$label" > "$version_file"
+    version=$(<"$version_file")
+    echo "$directory artifact set verified (version $version)"
+done
+
+check_readme_host_links
+if (( ${#host_dirs[@]} == 1 )); then
+    suffix=directory
+else
+    suffix=directories
 fi
-
-validate_host hosts/lab lab >/dev/null
-if [[ "$ALLOW_SPLIT" == true ]]; then
-    echo "Host artifact parity intentionally skipped: hosts/lab is a split directory"
-    exit 0
-fi
-
-host_manifest hosts/ex44 "$EX44_MANIFEST"
-host_manifest hosts/lab "$LAB_MANIFEST"
-compare_hosts "$EX44_MANIFEST" "$LAB_MANIFEST"
-echo "Host artifact parity verified: ex44 and lab are byte-identical"
+echo "Host artifact completeness verified: ${#host_dirs[@]} host $suffix"

@@ -72,10 +72,41 @@ docker run --detach \
 docker exec "$CONTAINER" bash /src/tests/integration/host-fixture.sh \
     /src/hosts/ex44/bootstrap.sh
 
+echo 'Checking non-interactive bootstrap safe-stop...'
+noninteractive_output="$TMP/noninteractive-output"
+set +e
+docker exec "$CONTAINER" bash /test/bootstrap-under-test.sh >"$noninteractive_output" 2>&1
+noninteractive_status=$?
+set -e
+if [[ "$noninteractive_status" -eq 0 ]]; then
+    echo 'ASSERTION FAILED: non-interactive bootstrap unexpectedly continued' >&2
+    cat "$noninteractive_output" >&2
+    exit 1
+fi
+[[ "$noninteractive_status" -eq 1 ]] || {
+    echo "ASSERTION FAILED: non-interactive bootstrap exited $noninteractive_status, expected 1" >&2
+    cat "$noninteractive_output" >&2
+    exit 1
+}
+grep -Fq 'ERROR: No terminal available for interactive input' "$noninteractive_output" || {
+    echo 'ASSERTION FAILED: non-interactive bootstrap produced the wrong diagnostic' >&2
+    cat "$noninteractive_output" >&2
+    exit 1
+}
+if docker exec "$CONTAINER" test -e /etc/bootstrap/config; then
+    echo 'ASSERTION FAILED: non-interactive bootstrap changed host configuration before stopping' >&2
+    exit 1
+fi
+if docker exec "$CONTAINER" test -s /var/lib/bootstrap-test/commands.log; then
+    echo 'ASSERTION FAILED: non-interactive bootstrap invoked a host-mutating command before stopping' >&2
+    exit 1
+fi
+echo 'PASS: non-interactive bootstrap refuses before host changes'
+
 # The fixture intentionally makes apt-get a no-op. A real Debian/Ubuntu host
 # installs OpenSSL in bootstrap's core package step, but a minimal test image
-# may not have it before that no-op. Skip this integration path rather than
-# weakening the production signature check or mutating the fixture into a
+# may not have it before that no-op. Skip the remaining integration path rather
+# than weakening the production signature check or mutating the fixture into a
 # different artifact.
 if ! docker exec "$CONTAINER" bash -ceu 'command -v openssl >/dev/null 2>&1'; then
     echo 'SKIP: bootstrap integration fixture lacks openssl for signed-artifact verification' >&2

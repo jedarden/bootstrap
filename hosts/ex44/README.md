@@ -60,15 +60,20 @@ Run the read-only preflight before running the signed bootstrap artifact:
 sudo ./scripts/bootstrap-preflight.sh
 ```
 
-The preflight exits 0 only for Debian 12/bookworm or Ubuntu 24.04/noble on
-amd64 and with the required package/system commands, a reachable systemd
-manager, DNS resolution, and outbound HTTPS present. It exits 1, without
-prompting or changing the host, when `/etc/os-release` is missing or does not
-identify an OS, the family/release is outside the matrix, the architecture is
-unsupported, a required command is absent, systemd is unavailable, DNS fails,
-or the HTTPS check fails. The controlling-terminal requirement remains an
-operator check; the preflight is deliberately runnable non-interactively.
-Bootstrap still performs its own package and artifact-authentication checks.
+The preflight is the rollout gate: it exits 0 only for Debian 12/bookworm or
+Ubuntu 24.04/noble on amd64, with the required package/system commands, a
+controlling terminal, a reachable systemd manager, DNS resolution, and
+outbound HTTPS present. It exits 1, without prompting or changing the host,
+when `/etc/os-release` is missing or does not identify an OS, the
+family/release is outside the matrix, the architecture is unsupported, a
+required command is absent, no controlling terminal is available, systemd is
+unavailable, DNS fails, or the HTTPS check fails. A non-interactive invocation
+must therefore stop with `no controlling terminal available` before the
+signed bootstrap is run. Start the rollout from an interactive SSH session
+(use `ssh -t` when a remote command wrapper would otherwise detach the
+terminal); do not treat a successful non-interactive probe as sufficient.
+Bootstrap still performs its own package and artifact-authentication checks
+and independently safe-stops if its `/dev/tty` cannot be opened.
 
 Have these inputs ready before starting:
 

@@ -30,16 +30,18 @@ be a root-run, interactive systemd installation with `bash`, `apt-get`,
 `dpkg`, `systemctl`, `getent`, and `curl`, plus working DNS and outbound
 HTTPS.
 
-Operators run `scripts/bootstrap-preflight.sh` before the signed bootstrap
-artifact. It fails closed with exit 1 when `/etc/os-release` is missing or
-unknown, the family/release is not in the matrix, the architecture is not
-amd64, a required command is absent, the systemd manager is unavailable, DNS
+Operators run `scripts/bootstrap-preflight.sh` from a controlling terminal
+before the signed bootstrap artifact. It fails closed with exit 1 when
+`/etc/os-release` is missing or unknown, the family/release is not in the
+matrix, the architecture is not amd64, a required command is absent, no
+controlling terminal is available, the systemd manager is unavailable, DNS
 cannot resolve the bootstrap host, or outbound HTTPS cannot fetch the check
 URL. It never prompts or changes the host. The preflight has acceptance
 coverage for both supported families, an unsupported release, an unsupported
-distribution, an unknown OS file, and pass/failure cases for root, systemd,
-DNS, and HTTPS. The controlling-terminal requirement remains an operator
-check because the preflight and its acceptance tests run non-interactively.
+distribution, an unknown OS file, a non-interactive refusal, and pass/failure
+cases for root, systemd, DNS, and HTTPS. The signed bootstrap also has
+integration coverage proving its non-interactive `/dev/tty` safe-stop occurs
+before host-mutating command shims run.
 
 Distribution model: Forgejo (`git.ardenone.com`) is the commit source of
 truth per this workspace's hosting convention, mirrored to GitHub

@@ -26,6 +26,12 @@ fail() {
     exit 1
 }
 
+require_controlling_terminal() {
+    if ! { : </dev/tty; } 2>/dev/null; then
+        fail "no controlling terminal available; run from an interactive terminal before invoking bootstrap"
+    fi
+}
+
 read_os_release_value() {
     local key=$1 path=$2 value
 
@@ -56,6 +62,7 @@ while (($# > 0)); do
     shift
 done
 
+require_controlling_terminal
 [[ $EUID -eq 0 ]] || fail "run as root (use sudo)"
 [[ -r "$OS_RELEASE_FILE" ]] || fail "cannot read $OS_RELEASE_FILE; refusing to guess the operating system"
 
@@ -104,5 +111,4 @@ curl --fail --silent --show-error --location --max-time 10 \
     fail "outbound HTTPS check failed for $HTTPS_CHECK_URL"
 
 echo "Preflight passed: $supported_release on $architecture."
-echo "Validated: root, systemd as PID 1, DNS, and outbound HTTPS."
-echo "Operator check remaining: run the interactive bootstrap from a controlling terminal."
+echo "Validated: root, controlling terminal, systemd as PID 1, DNS, and outbound HTTPS."

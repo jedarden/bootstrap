@@ -40,6 +40,7 @@ fi
 run_case() {
     local label=$1 expected_status=$2 expected_text=$3
     local root_mode=$4 systemd_mode=$5 dns_mode=$6 https_mode=$7
+    local terminal_mode=${TERMINAL_MODE:-tty}
     local os_release="$WORK/$label-os-release"
     local output="$WORK/$label-output"
     local bin_dir="$WORK/$label-bin"
@@ -87,6 +88,9 @@ CURL
     chmod 0755 "$bin_dir/systemctl" "$bin_dir/getent" "$bin_dir/curl"
 
     local -a docker_args=(--rm)
+    if [[ "$terminal_mode" == tty ]]; then
+        docker_args+=(--tty)
+    fi
     if [[ "$root_mode" == non-root ]]; then
         docker_args+=(--user 65534:65534)
     fi
@@ -148,6 +152,13 @@ run_case unknown-os 1 'could not identify the operating system' root pass pass p
     'PRETTY_NAME="Unknown Linux"'
 
 run_case root-required 1 'run as root (use sudo)' non-root pass pass pass \
+    'ID=debian' \
+    'VERSION_ID="12"' \
+    'PRETTY_NAME="Debian GNU/Linux 12 (bookworm)"'
+
+TERMINAL_MODE=none run_case controlling-terminal-required 1 \
+    'no controlling terminal available; run from an interactive terminal' \
+    root pass pass pass \
     'ID=debian' \
     'VERSION_ID="12"' \
     'PRETTY_NAME="Debian GNU/Linux 12 (bookworm)"'

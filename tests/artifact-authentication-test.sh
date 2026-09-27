@@ -31,6 +31,24 @@ assert_artifact() {
     [[ "$actual" == "$expected" ]] || fail "digest mismatch for $artifact"
 }
 
+assert_manifest_coverage() {
+    local expected actual
+    expected="$TMP/expected-artifacts"
+    actual="$TMP/manifest-artifacts"
+    {
+        printf '%s\n' \
+            bootstrap.sh \
+            start.sh \
+            start.sh.version \
+            keys/jedarden.pub \
+            keys/jeda-mbp.pub \
+            keys/bootstrap-artifacts-signing.pub
+        find "$HOST_DIR" -maxdepth 1 -type f -name 'bootstrap-*.sh' -printf '%f\n'
+    } | sort > "$expected"
+    sed -n 's/^artifact=\([^ ]*\) [0-9a-f]\{64\}$/\1/p' "$MANIFEST" | sort > "$actual"
+    cmp -s "$expected" "$actual" || fail 'manifest artifact coverage is incomplete or unexpected'
+}
+
 signature_bin="$TMP/manifest.sig.bin"
 sed -n 's/^signature=//p' "$SIGNATURE" | base64 --decode > "$signature_bin" 2>/dev/null ||
     fail 'committed artifact signature encoding is invalid'
@@ -45,12 +63,13 @@ grep -Fxq 'key_id=bootstrap-rsa-2026-09' "$MANIFEST" ||
 grep -Fxq 'version=1.3.1' "$MANIFEST" ||
     fail 'artifact manifest version is missing'
 
-assert_artifact bootstrap.sh "$HOST_DIR/bootstrap.sh"
-assert_artifact bootstrap-1.3.1.sh "$HOST_DIR/bootstrap-1.3.1.sh"
-assert_artifact start.sh "$HOST_DIR/start.sh"
-assert_artifact start.sh.version "$HOST_DIR/start.sh.version"
-assert_artifact keys/jedarden.pub "$HOST_DIR/keys/jedarden.pub"
-assert_artifact keys/jeda-mbp.pub "$HOST_DIR/keys/jeda-mbp.pub"
+assert_manifest_coverage
+while IFS= read -r line; do
+    [[ "$line" =~ ^artifact=([^[:space:]]+)[[:space:]]([0-9a-f]{64})$ ]] ||
+        fail 'manifest contains a malformed artifact digest entry'
+    artifact=${BASH_REMATCH[1]}
+    assert_artifact "$artifact" "$HOST_DIR/$artifact"
+done < <(grep -E '^artifact=' "$MANIFEST")
 
 cp "$MANIFEST" "$TMP/tampered-manifest"
 sed -i 's/^version=1\.3\.1$/version=9.9.9/' "$TMP/tampered-manifest"

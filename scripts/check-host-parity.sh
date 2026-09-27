@@ -175,6 +175,111 @@ if embedded != start:
 PY
 }
 
+extract_launcher_key_id() {
+    local path=$1 line
+    local -a lines
+
+    mapfile -t lines < <(grep -E '^ARTIFACT_TRUSTED_KEY_ID="[A-Za-z0-9._-]+"$' "$path" || true)
+    [[ ${#lines[@]} -gt 0 ]] || die "$path must contain an ARTIFACT_TRUSTED_KEY_ID assignment"
+    for line in "${lines[@]}"; do
+        [[ "$line" == "${lines[0]}" ]] ||
+            die "$path contains disagreeing ARTIFACT_TRUSTED_KEY_ID assignments"
+    done
+    line=${lines[0]#ARTIFACT_TRUSTED_KEY_ID=\"}
+    printf '%s\n' "${line%\"}"
+}
+
+verify_artifact_manifest() {
+    local host_dir=$1 manifest=$2 version=$3 label=$4 expected_set=$5
+    local key_id manifest_version signature_key_id signature_value
+    local line artifact digest path expected actual
+    local -a formats key_ids versions signature_ids signatures artifact_lines
+    local -a expected_artifacts actual_artifacts
+    local signature_bin="$TMP/$label.signature.bin"
+    local expected_list="$TMP/$label.expected-artifacts"
+    local actual_list="$TMP/$label.actual-artifacts"
+
+    command -v base64 >/dev/null 2>&1 || die 'base64 is required to verify artifact manifests'
+    command -v openssl >/dev/null 2>&1 || die 'openssl is required to verify artifact manifests'
+    command -v sha256sum >/dev/null 2>&1 || die 'sha256sum is required to verify artifact manifests'
+
+    while IFS= read -r line; do
+        case "$line" in
+            format=*|key_id=*|version=*|artifact=*) ;;
+            *) die "$manifest contains an unexpected manifest line" ;;
+        esac
+    done < "$manifest"
+
+    mapfile -t formats < <(grep -E '^format=bootstrap-artifact-manifest-v1$' "$manifest" || true)
+    mapfile -t key_ids < <(grep -E '^key_id=[A-Za-z0-9._-]+$' "$manifest" || true)
+    mapfile -t versions < <(grep -E '^version=[0-9]+\.[0-9]+\.[0-9]+$' "$manifest" || true)
+    [[ ${#formats[@]} -eq 1 && ${#key_ids[@]} -eq 1 && ${#versions[@]} -eq 1 ]] ||
+        die "$manifest metadata is malformed"
+    key_id=${key_ids[0]#key_id=}
+    manifest_version=${versions[0]#version=}
+    [[ "$manifest_version" == "$version" ]] ||
+        die "$manifest version $manifest_version disagrees with $host_dir/start.sh.version $version"
+    [[ "$key_id" == "$(extract_launcher_key_id "$host_dir/start.sh")" ]] ||
+        die "$manifest key ID does not match $host_dir/start.sh"
+    [[ "$key_id" == "$(extract_launcher_key_id "$host_dir/bootstrap.sh")" ]] ||
+        die "$manifest key ID does not match $host_dir/bootstrap.sh"
+
+    mapfile -t signature_ids < <(grep -E '^key_id=[A-Za-z0-9._-]+$' "$host_dir/artifact-manifest.sig" || true)
+    mapfile -t signatures < <(grep -E '^signature=[A-Za-z0-9+/]+=*$' "$host_dir/artifact-manifest.sig" || true)
+    [[ ${#signature_ids[@]} -eq 1 && ${#signatures[@]} -eq 1 ]] ||
+        die "$host_dir/artifact-manifest.sig metadata is malformed"
+    signature_key_id=${signature_ids[0]#key_id=}
+    [[ "$signature_key_id" == "$key_id" ]] ||
+        die "$host_dir/artifact-manifest.sig key ID does not match $manifest"
+    signature_value=${signatures[0]#signature=}
+    printf '%s' "$signature_value" | base64 --decode > "$signature_bin" 2>/dev/null ||
+        die "$host_dir/artifact-manifest.sig is not valid base64"
+    openssl dgst -sha256 \
+        -verify "$host_dir/keys/bootstrap-artifacts-signing.pub" \
+        -signature "$signature_bin" "$manifest" >/dev/null 2>&1 ||
+        die "$manifest detached signature does not verify with its pinned public key"
+
+    mapfile -t artifact_lines < <(grep -E '^artifact=' "$manifest" || true)
+    (( ${#artifact_lines[@]} > 0 )) || die "$manifest contains no artifact entries"
+    : > "$actual_list"
+    for line in "${artifact_lines[@]}"; do
+        [[ "$line" =~ ^artifact=([^[:space:]]+)[[:space:]]([0-9a-f]{64})$ ]] ||
+            die "$manifest contains a malformed artifact entry"
+        artifact=${BASH_REMATCH[1]}
+        digest=${BASH_REMATCH[2]}
+        printf '%s\n' "$artifact" >> "$actual_list"
+        printf '%s\n' "${artifact}|${digest}" >> "$actual_list.entries"
+    done
+
+    {
+        while IFS= read -r path; do
+            case "$path" in
+                artifact-manifest.txt|artifact-manifest.sig)
+                    continue
+                    ;;
+            esac
+            printf '%s\n' "$path"
+        done < "$expected_set"
+        printf '%s\n' \
+            keys/jedarden.pub \
+            keys/jeda-mbp.pub \
+            keys/bootstrap-artifacts-signing.pub
+    } | sort > "$expected_list"
+    sort "$actual_list" > "$actual_list.sorted"
+    mapfile -t expected_artifacts < "$expected_list"
+    mapfile -t actual_artifacts < "$actual_list.sorted"
+    [[ "${expected_artifacts[*]}" == "${actual_artifacts[*]}" ]] ||
+        die "$manifest artifact coverage does not match the host release set"
+
+    while IFS='|' read -r artifact digest; do
+        path="$host_dir/$artifact"
+        [[ -f "$path" ]] || die "$manifest names missing artifact $artifact"
+        expected=$(sha256sum "$path" | awk '{print $1}')
+        [[ "$expected" == "$digest" ]] ||
+            die "$manifest digest mismatch for $host_dir/$artifact"
+    done < "$actual_list.entries"
+}
+
 host_manifest() {
     local directory=$1 output=$2 filename all_files
     all_files="$output.all"
@@ -200,8 +305,10 @@ host_manifest() {
         grep -Fxq "$filename" "$output" ||
             die "$directory/$filename is missing in the $SOURCE source"
     done
-    source_path_exists "$directory/keys/bootstrap-artifacts-signing.pub" ||
-        die "$directory/keys/bootstrap-artifacts-signing.pub is missing in the $SOURCE source"
+    for filename in jedarden.pub jeda-mbp.pub bootstrap-artifacts-signing.pub; do
+        source_path_exists "$directory/keys/$filename" ||
+            die "$directory/keys/$filename is missing in the $SOURCE source"
+    done
     grep -Eq '^bootstrap-[0-9]+\.[0-9]+\.[0-9]+\.sh$' "$output" ||
         die "$directory has no versioned bootstrap archive"
 }
@@ -209,7 +316,7 @@ host_manifest() {
 validate_host() {
     local directory=$1 label=$2 manifest="$TMP/$2.manifest" host_dir="$TMP/$2"
     local version archive archive_version bootstrap_version
-    local filename
+    local filename key_filename
     local -a archives
 
     host_manifest "$directory" "$manifest"
@@ -223,8 +330,9 @@ validate_host() {
             die "$directory/$filename is not executable in the $SOURCE source"
     done < "$manifest"
     mkdir -p "$host_dir/keys"
-    source_copy "$directory/keys/bootstrap-artifacts-signing.pub" \
-        "$host_dir/keys/bootstrap-artifacts-signing.pub"
+    for key_filename in jedarden.pub jeda-mbp.pub bootstrap-artifacts-signing.pub; do
+        source_copy "$directory/keys/$key_filename" "$host_dir/keys/$key_filename"
+    done
 
     bash -n "$host_dir/start.sh"
     bash -n "$host_dir/bootstrap.sh"
@@ -252,6 +360,7 @@ validate_host() {
     [[ -f "$archive" ]] || die "$directory is missing the current bootstrap-$version.sh archive"
     cmp -s "$host_dir/bootstrap.sh" "$archive" ||
         die "$directory/bootstrap-$version.sh is not an exact copy of bootstrap.sh"
+    verify_artifact_manifest "$host_dir" "$host_dir/artifact-manifest.txt" "$version" "$label" "$manifest"
     printf '%s\n' "$version"
 }
 

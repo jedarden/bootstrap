@@ -69,6 +69,12 @@ Forgejo state through GitHub and its raw artifacts:
 ./scripts/start-sh-release.sh distribution-check
 ```
 
+Run the local self-update regression suite without contacting the network:
+
+```bash
+tests/start-sh-self-update-test.sh
+```
+
 The check requires the release files to be committed, confirms local `HEAD`
 matches Forgejo `origin/main`, confirms GitHub `main` has the same commit, and
 byte-compares the raw `bootstrap.sh`, `start.sh`, and `start.sh.version` files

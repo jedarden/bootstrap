@@ -9,7 +9,9 @@ case "${1:-}" in
         bash -n "$ROOT/hosts/ex44/start.sh"
         bash -n "$ROOT/tests/integration/host-fixture.sh"
         bash -n "$ROOT/tests/integration/bootstrap-test.sh"
+        bash -n "$ROOT/tests/start-sh-self-update-test.sh"
         bash -n "$ROOT/scripts/start-sh-release.sh"
+        "$ROOT/tests/start-sh-self-update-test.sh"
         "$ROOT/hosts/ex44/sync-start-sh.sh" --check
         "$ROOT/scripts/start-sh-release.sh" --check
         ;;

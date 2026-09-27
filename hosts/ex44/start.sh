@@ -22,7 +22,7 @@
 # bootstrap.sh's embedded copy, then commit both together. See
 # docs/plan/plan.md ADR-1 for why (a hand-patched host copy and a corrupted
 # embedded copy both went undetected in the wild before this rule existed).
-START_SH_VERSION="1.3.0"
+START_SH_VERSION="1.3.1"
 REPO_URL="https://raw.githubusercontent.com/jedarden/bootstrap/main/hosts/ex44"
 
 usage() {
@@ -129,6 +129,12 @@ check_for_self_update() {
         return 0  # Can't check, continue anyway
     fi
 
+    # Ignore malformed release markers. A non-version string must never make
+    # the launcher consider an arbitrary payload eligible for installation.
+    if [[ ! "$remote_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        return 0
+    fi
+
     # Compare versions
     if [[ "$START_SH_VERSION" != "$remote_version" ]]; then
         local lowest
@@ -136,18 +142,36 @@ check_for_self_update() {
         if [[ "$START_SH_VERSION" == "$lowest" && "$START_SH_VERSION" != "$remote_version" ]]; then
             echo "Updating start.sh: $START_SH_VERSION -> $remote_version"
             local new_script
-            new_script=$(curl -sfL "$REPO_URL/start.sh" 2>/dev/null)
+            new_script=$(mktemp "${SELF_PATH}.tmp.XXXXXX") || {
+                echo "Warning: could not create a temporary start.sh update, keeping current version $START_SH_VERSION" >&2
+                return 0
+            }
+
+            # Fetch beside the deployed launcher so the final rename is an
+            # atomic replacement on the same filesystem. Never stream a
+            # remote response directly into the working launcher.
+            if ! curl -sfL "$REPO_URL/start.sh" > "$new_script" 2>/dev/null; then
+                rm -f "$new_script"
+                return 0
+            fi
+
             # Guard against installing a broken or empty payload (e.g. a
             # login page, truncated fetch, or corrupted commit) - verify it
             # parses as valid bash before overwriting the working script.
-            if [[ -n "$new_script" ]] && bash -n <(printf '%s' "$new_script") 2>/dev/null; then
-                echo "$new_script" > "$SELF_PATH"
-                chmod +x "$SELF_PATH"
-                echo "Updated! Restarting..."
-                exec "$SELF_PATH" --no-update ${ORIGINAL_ARGS[@]+"${ORIGINAL_ARGS[@]}"}
-            elif [[ -n "$new_script" ]]; then
+            if [[ ! -s "$new_script" ]] || ! bash -n "$new_script" 2>/dev/null; then
                 echo "Warning: fetched start.sh failed syntax check, keeping current version $START_SH_VERSION"
+                rm -f "$new_script"
+                return 0
             fi
+
+            if ! chmod +x "$new_script" || ! mv -f "$new_script" "$SELF_PATH"; then
+                echo "Warning: could not install fetched start.sh, keeping current version $START_SH_VERSION" >&2
+                rm -f "$new_script"
+                return 0
+            fi
+
+            echo "Updated! Restarting..."
+            exec "$SELF_PATH" --no-update ${ORIGINAL_ARGS[@]+"${ORIGINAL_ARGS[@]}"}
         fi
     fi
 }

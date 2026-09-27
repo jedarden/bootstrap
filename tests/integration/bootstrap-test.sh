@@ -235,6 +235,16 @@ assert_mode() {
     assert_container "$description" "[[ \$(stat -c %a '$path') == '$mode' ]]"
 }
 
+assert_output_excludes() {
+    local description=$1
+    local output=$2
+    local text=$3
+    if grep -Fq -- "$text" "$output"; then
+        echo "ASSERTION FAILED: $description" >&2
+        exit 1
+    fi
+}
+
 assert_count() {
     local description=$1
     local expected=$2
@@ -614,6 +624,7 @@ openbao_restic_password='openbao-password'
 openbao_env="$TMP/openbao.env"
 write_private_env "$openbao_env" \
     "OPENBAO_TOKEN=$openbao_token" \
+    "BOOTSTRAP_TEST_OPENBAO_EXPECTED_TOKEN=$openbao_token" \
     'BOOTSTRAP_TEST_OPENBAO_MODE=complete' \
     "BOOTSTRAP_TEST_OPENBAO_B2_KEY=$openbao_b2_key" \
     "BOOTSTRAP_TEST_OPENBAO_RESTIC_PASSWORD=$openbao_restic_password"
@@ -623,11 +634,24 @@ assert_file_contains 'OpenBao supplies the B2 application key' \
     /etc/restic/b2.env "$openbao_b2_key"
 assert_file_contains 'OpenBao supplies the restic password' \
     /etc/restic/b2.env "$openbao_restic_password"
+assert_output_excludes 'OpenBao token is not printed' \
+    "$TMP/openbao-output" "$openbao_token"
+assert_output_excludes 'OpenBao B2 key is not printed' \
+    "$TMP/openbao-output" "$openbao_b2_key"
+assert_output_excludes 'OpenBao restic password is not printed' \
+    "$TMP/openbao-output" "$openbao_restic_password"
+assert_container 'OpenBao request uses the documented KV-v2 GET path' \
+    "grep -Eq '^GET /v1/secret/bootstrap/[^/]+/b2$' /var/lib/bootstrap-test/openbao-requests.log"
+assert_container 'OpenBao request passed the private token header contract' \
+    'test -f /var/lib/bootstrap-test/openbao-api-contract-ok'
+assert_container 'OpenBao token header file is removed after the read' \
+    '! test -e "$(cat /var/lib/bootstrap-test/openbao-last-header-path)"'
 
 partial_openbao_key='partial-openbao-application-key'
 partial_openbao_env="$TMP/partial-openbao.env"
 write_private_env "$partial_openbao_env" \
     "OPENBAO_TOKEN=$openbao_token" \
+    "BOOTSTRAP_TEST_OPENBAO_EXPECTED_TOKEN=$openbao_token" \
     'BOOTSTRAP_TEST_OPENBAO_MODE=partial' \
     "BOOTSTRAP_TEST_OPENBAO_B2_KEY=$partial_openbao_key"
 partial_openbao_input="$TMP/partial-openbao-input"
@@ -650,6 +674,92 @@ if docker exec "$CONTAINER" grep -Fq -- "$partial_openbao_key" /etc/restic/b2.en
     echo 'ASSERTION FAILED: partial OpenBao pair was silently mixed with interactive input' >&2
     exit 1
 fi
+assert_output_excludes 'partial OpenBao token is not printed' \
+    "$partial_openbao_output" "$openbao_token"
+assert_output_excludes 'partial OpenBao key is not printed' \
+    "$partial_openbao_output" "$partial_openbao_key"
+
+malformed_openbao_env="$TMP/malformed-openbao.env"
+write_private_env "$malformed_openbao_env" \
+    "OPENBAO_TOKEN=$openbao_token" \
+    "BOOTSTRAP_TEST_OPENBAO_EXPECTED_TOKEN=$openbao_token" \
+    'BOOTSTRAP_TEST_OPENBAO_MODE=malformed'
+malformed_openbao_input="$TMP/malformed-openbao-input"
+printf '\n\n%s\n%s\n%s\n\n' \
+    'malformed-fallback-application-key' \
+    'malformed-fallback-password' \
+    'malformed-fallback-password' > "$malformed_openbao_input"
+run_bootstrap malformed-openbao "$malformed_openbao_input" "$malformed_openbao_env"
+malformed_openbao_output="$TMP/malformed-openbao-output"
+grep -Fq 'No secrets found at OpenBao path:' "$malformed_openbao_output" || {
+    echo 'ASSERTION FAILED: malformed OpenBao response produced the wrong diagnostic' >&2
+    cat "$malformed_openbao_output" >&2
+    exit 1
+}
+assert_file_contains 'malformed OpenBao response falls back to the interactive B2 key' \
+    /etc/restic/b2.env 'malformed-fallback-application-key'
+assert_file_contains 'malformed OpenBao response falls back to the interactive password' \
+    /etc/restic/b2.env 'malformed-fallback-password'
+assert_output_excludes 'malformed OpenBao token is not printed' \
+    "$malformed_openbao_output" "$openbao_token"
+
+unavailable_openbao_env="$TMP/unavailable-openbao.env"
+write_private_env "$unavailable_openbao_env" \
+    "OPENBAO_TOKEN=$openbao_token" \
+    "BOOTSTRAP_TEST_OPENBAO_EXPECTED_TOKEN=$openbao_token" \
+    'BOOTSTRAP_TEST_OPENBAO_MODE=unavailable'
+unavailable_openbao_input="$TMP/unavailable-openbao-input"
+printf '\n\n%s\n%s\n%s\n\n' \
+    'unavailable-fallback-application-key' \
+    'unavailable-fallback-password' \
+    'unavailable-fallback-password' > "$unavailable_openbao_input"
+run_bootstrap unavailable-openbao "$unavailable_openbao_input" "$unavailable_openbao_env"
+unavailable_openbao_output="$TMP/unavailable-openbao-output"
+grep -Fq 'No OpenBao token provided or OpenBao unreachable.' "$unavailable_openbao_output" || {
+    echo 'ASSERTION FAILED: unavailable OpenBao produced the wrong diagnostic' >&2
+    cat "$unavailable_openbao_output" >&2
+    exit 1
+}
+assert_file_contains 'unavailable OpenBao falls back to the interactive B2 key' \
+    /etc/restic/b2.env 'unavailable-fallback-application-key'
+assert_file_contains 'unavailable OpenBao falls back to the interactive password' \
+    /etc/restic/b2.env 'unavailable-fallback-password'
+assert_output_excludes 'unavailable OpenBao token is not printed' \
+    "$unavailable_openbao_output" "$openbao_token"
+
+openbao_request_count_before=$(docker exec "$CONTAINER" bash -ceu \
+    "grep -c '^GET ' /var/lib/bootstrap-test/openbao-requests.log")
+docker exec "$CONTAINER" systemctl stop tailscaled
+tailscale_unavailable_env="$TMP/tailscale-unavailable.env"
+write_private_env "$tailscale_unavailable_env" \
+    "OPENBAO_TOKEN=$openbao_token" \
+    "BOOTSTRAP_TEST_OPENBAO_EXPECTED_TOKEN=$openbao_token" \
+    'BOOTSTRAP_TEST_OPENBAO_MODE=complete'
+tailscale_unavailable_input="$TMP/tailscale-unavailable-input"
+printf '\n\n%s\n%s\n%s\n\n' \
+    'tailscale-unavailable-application-key' \
+    'tailscale-unavailable-password' \
+    'tailscale-unavailable-password' > "$tailscale_unavailable_input"
+run_bootstrap tailscale-unavailable "$tailscale_unavailable_input" "$tailscale_unavailable_env"
+tailscale_unavailable_output="$TMP/tailscale-unavailable-output"
+grep -Fq 'OpenBao fetch requires Tailscale connectivity. Falling back to interactive prompt.' \
+    "$tailscale_unavailable_output" || {
+    echo 'ASSERTION FAILED: inactive Tailscale produced the wrong OpenBao fallback diagnostic' >&2
+    cat "$tailscale_unavailable_output" >&2
+    exit 1
+}
+assert_file_contains 'inactive Tailscale falls back to the interactive B2 key' \
+    /etc/restic/b2.env 'tailscale-unavailable-application-key'
+assert_file_contains 'inactive Tailscale falls back to the interactive password' \
+    /etc/restic/b2.env 'tailscale-unavailable-password'
+openbao_request_count_after=$(docker exec "$CONTAINER" bash -ceu \
+    "grep -c '^GET ' /var/lib/bootstrap-test/openbao-requests.log")
+if [[ "$openbao_request_count_after" != "$openbao_request_count_before" ]]; then
+    echo 'ASSERTION FAILED: OpenBao was queried while Tailscale was unavailable' >&2
+    exit 1
+fi
+assert_output_excludes 'inactive Tailscale token is not printed' \
+    "$tailscale_unavailable_output" "$openbao_token"
 
 rotation_sops_b2_key='rotated-sops-application-key'
 rotation_sops_restic_password='rotated-sops-password'
@@ -658,6 +768,7 @@ write_private_env "$rotation_sops_env" \
     "BOOTSTRAP_B2_APPLICATION_KEY=$rotation_sops_b2_key" \
     "BOOTSTRAP_RESTIC_PASSWORD=$rotation_sops_restic_password" \
     "OPENBAO_TOKEN=$openbao_token" \
+    "BOOTSTRAP_TEST_OPENBAO_EXPECTED_TOKEN=$openbao_token" \
     'BOOTSTRAP_TEST_OPENBAO_MODE=complete' \
     "BOOTSTRAP_TEST_OPENBAO_B2_KEY=$openbao_b2_key" \
     "BOOTSTRAP_TEST_OPENBAO_RESTIC_PASSWORD=$openbao_restic_password"
@@ -679,6 +790,7 @@ fi
 rotated_openbao_env="$TMP/rotated-openbao.env"
 write_private_env "$rotated_openbao_env" \
     "OPENBAO_TOKEN=$openbao_token" \
+    "BOOTSTRAP_TEST_OPENBAO_EXPECTED_TOKEN=$openbao_token" \
     'BOOTSTRAP_TEST_OPENBAO_MODE=complete' \
     "BOOTSTRAP_TEST_OPENBAO_B2_KEY=$rotation_sops_b2_key" \
     "BOOTSTRAP_TEST_OPENBAO_RESTIC_PASSWORD=$rotation_sops_restic_password"

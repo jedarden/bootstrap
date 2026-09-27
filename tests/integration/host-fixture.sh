@@ -129,12 +129,39 @@ chmod +x "$HOME/.local/bin/claude"
 CLAUDE_INSTALL
                 ;;
             https://traefik-rs-manager:8200/v1/secret/bootstrap/*/b2)
+                method=""
+                header_reference=""
+                curl_arguments=("$@")
+                for ((argument_index = 0; argument_index < ${#curl_arguments[@]}; argument_index++)); do
+                    case "${curl_arguments[$argument_index]}" in
+                        -X)
+                            method="${curl_arguments[$((argument_index + 1))]:-}"
+                            ;;
+                        -H)
+                            header_reference="${curl_arguments[$((argument_index + 1))]:-}"
+                            ;;
+                    esac
+                done
+                [[ "$method" == GET && "$header_reference" == @* ]] || exit 22
+                header_path=${header_reference#@}
+                [[ -f "$header_path" ]] || exit 22
+                printf '%s\n' "$header_path" > "$state/openbao-last-header-path"
+                [[ "$(cat "$header_path")" == "X-Vault-Token: ${BOOTSTRAP_TEST_OPENBAO_EXPECTED_TOKEN:-}" ]] || exit 22
+                printf 'GET %s\n' "${url#https://traefik-rs-manager:8200}" >> "$state/openbao-requests.log"
                 case "${BOOTSTRAP_TEST_OPENBAO_MODE:-unavailable}" in
-                    complete|partial)
-                        # The jq double below supplies the fields from the
-                        # exec environment. Keep the transport response
-                        # value-free so this fixture never prints credentials.
-                        printf '%s\n' '{"data":{"data":{}}}'
+                    complete)
+                        printf '{"data":{"data":{"b2_application_key":"%s","restic_password":"%s"}}}\n' \
+                            "${BOOTSTRAP_TEST_OPENBAO_B2_KEY:-}" \
+                            "${BOOTSTRAP_TEST_OPENBAO_RESTIC_PASSWORD:-}"
+                        touch "$state/openbao-api-contract-ok"
+                        ;;
+                    partial)
+                        printf '{"data":{"data":{"b2_application_key":"%s"}}}\n' \
+                            "${BOOTSTRAP_TEST_OPENBAO_B2_KEY:-}"
+                        touch "$state/openbao-api-contract-ok"
+                        ;;
+                    malformed)
+                        printf '%s\n' '{"data":{"data":'
                         ;;
                     *)
                         exit 7
@@ -185,19 +212,35 @@ CLAUDE_INSTALL
                 exit 0
                 ;;
             is-enabled)
-                unit="${2:-}"
+                unit="${3:-${2:-}}"
                 if [[ "$unit" == docker.service && -f "$state/system-docker-disabled" ]]; then
                     echo disabled
                     exit 0
+                fi
+                if [[ "$unit" == tailscaled ]]; then
+                    if [[ -f "$state/tailscaled-enabled" ]]; then
+                        [[ "${2:-}" == --quiet ]] || echo enabled
+                        exit 0
+                    fi
+                    [[ "${2:-}" == --quiet ]] || echo disabled
+                    exit 1
                 fi
                 echo enabled
                 exit 0
                 ;;
             is-active)
-                unit="${2:-}"
+                unit="${3:-${2:-}}"
                 if [[ "$unit" == docker.service && -f "$state/system-docker-disabled" ]]; then
                     echo inactive
                     exit 0
+                fi
+                if [[ "$unit" == tailscaled ]]; then
+                    if [[ -f "$state/tailscaled-active" ]]; then
+                        [[ "${2:-}" == --quiet ]] || echo active
+                        exit 0
+                    fi
+                    [[ "${2:-}" == --quiet ]] || echo inactive
+                    exit 3
                 fi
                 echo active
                 exit 0
@@ -337,18 +380,21 @@ SSHD
         fi
         ;;
     jq)
+        json=$(cat)
         case "$*" in
             '-e .data.data')
-                [[ "${BOOTSTRAP_TEST_OPENBAO_MODE:-unavailable}" != unavailable ]] || exit 1
-                echo '{}'
+                [[ "$json" == '{"data":{"data":'* ]] || exit 1
+                [[ "$json" == *'}}}' ]] || exit 1
                 ;;
             '-r .data.data.b2_application_key // empty')
-                [[ "${BOOTSTRAP_TEST_OPENBAO_MODE:-unavailable}" != unavailable ]] || exit 1
-                printf '%s\n' "${BOOTSTRAP_TEST_OPENBAO_B2_KEY:-}"
+                if [[ "$json" =~ \"b2_application_key\":\"([^\"]*)\" ]]; then
+                    printf '%s\n' "${BASH_REMATCH[1]}"
+                fi
                 ;;
             '-r .data.data.restic_password // empty')
-                [[ "${BOOTSTRAP_TEST_OPENBAO_MODE:-unavailable}" == complete ]] || exit 0
-                printf '%s\n' "${BOOTSTRAP_TEST_OPENBAO_RESTIC_PASSWORD:-}"
+                if [[ "$json" =~ \"restic_password\":\"([^\"]*)\" ]]; then
+                    printf '%s\n' "${BASH_REMATCH[1]}"
+                fi
                 ;;
             *)
                 echo 'bootstrap-test.tailnet.ts.net'

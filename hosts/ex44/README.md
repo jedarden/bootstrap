@@ -11,10 +11,20 @@ Bootstrap script for Hetzner EX44 dedicated server. Sets up a hardened, multi-us
 5. **Kernel Hardening** - sysctl security settings
 6. **Firewall** - UFW: deny all except Tailscale + Hetzner rescue
 7. **Tailscale** - Secure mesh access with SSH
-8. **Docker** - Hardened container runtime
+8. **Docker** - Rootless, per-user container runtime with the system daemon
+   disabled
 9. **Security Services** - fail2ban, auditd, auto-updates
 
 ## Installed Utilities
+
+Docker is installed with the rootless prerequisites (`uidmap`, `rootlesskit`,
+`slirp4netns`, `fuse-overlayfs`, and `dbus-user-session`). Each configured
+user receives a distinct subordinate UID/GID range, a lingering user
+systemd service, and a socket environment pointing at
+`/run/user/<uid>/docker.sock`. The system `docker.service` and
+`docker.socket` are stopped and disabled, so workloads never fall back to a
+root-owned daemon. Use `start-docker` as the configured user to start and
+verify that user's daemon.
 
 | Category | Tools |
 |----------|-------|

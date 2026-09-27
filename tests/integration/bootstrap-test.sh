@@ -415,20 +415,32 @@ assert_mode 'trading authorized keys are private' /home/trading/.ssh/authorized_
 assert_mode 'restic credentials are private' /etc/restic/b2.env 600
 assert_file_contains 'restic repository uses the configured prefix' \
     /etc/restic/b2.env 'RESTIC_REPOSITORY="b2:test-bucket:test-prefix/'
+assert_container 'rootless Docker prerequisites are installed' \
+    'grep -Eq "apt-get.*uidmap.*dbus-user-session.*fuse-overlayfs.*rootlesskit.*slirp4netns" /var/lib/bootstrap-test/commands.log'
 assert_container 'rootless Docker has a subuid range' \
-    'grep -Eq "^coding:[0-9]+:[0-9]+$" /etc/subuid && grep -Eq "^trading:[0-9]+:[0-9]+$" /etc/subuid'
+    'grep -Fxq "coding:100000:65536" /etc/subuid && grep -Fxq "trading:165536:65536" /etc/subuid && \
+     [[ $(grep -Ec "^(coding|trading):" /etc/subuid) -eq 2 ]]'
 assert_container 'rootless Docker has subordinate groups for both users' \
-    'grep -Eq "^coding:[0-9]+:[0-9]+$" /etc/subgid && grep -Eq "^trading:[0-9]+:[0-9]+$" /etc/subgid'
+    'grep -Fxq "coding:100000:65536" /etc/subgid && grep -Fxq "trading:165536:65536" /etc/subgid && \
+     [[ $(grep -Ec "^(coding|trading):" /etc/subgid) -eq 2 ]]'
+assert_container 'rootful Docker daemon is disabled' \
+    '[[ -f /var/lib/bootstrap-test/system-docker-disabled ]] && [[ ! -e /run/docker.sock ]]'
 assert_container 'rootless Docker has user-owned services and runtime directories' \
     'for user in coding trading; do \
          [[ -f /home/$user/.config/systemd/user/docker.service ]] && \
          [[ $(stat -c %U:%G /home/$user/.config/systemd/user/docker.service) == $user:$user ]] && \
+         [[ -L /home/$user/.config/systemd/user/default.target.wants/docker.service ]] && \
+         [[ $(readlink /home/$user/.config/systemd/user/default.target.wants/docker.service) == ../docker.service ]] && \
+         [[ -f /var/lib/systemd/linger/$user ]] && \
          [[ $(stat -c %U:%a /run/user/$(id -u $user)) == $user:700 ]]; \
      done'
+assert_container 'rootless Docker service is not a root service' \
+    '! grep -Eq "User=root|/etc/systemd/system/docker.service" /home/coding/.config/systemd/user/docker.service && \
+     grep -Fq "dockerd-rootless.sh" /home/coding/.config/systemd/user/docker.service'
 assert_file_contains 'rootless Docker environment is configured' \
-    /home/coding/.bashrc '# === Rootless Docker ==='
+    /home/coding/.bashrc 'export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"'
 assert_file_contains 'trading rootless Docker environment is configured' \
-    /home/trading/.bashrc '# === Rootless Docker ==='
+    /home/trading/.bashrc 'export DOCKER_HOST="unix://$XDG_RUNTIME_DIR/docker.sock"'
 assert_container 'launcher is exposed on PATH' \
     'for user in coding trading; do \
          [[ -L /home/$user/.local/bin/start ]] && \
@@ -443,6 +455,9 @@ for user in coding trading; do
     assert_user_output "$user rootless Docker helper runs unprivileged" \
         "$user" 'Rootless Docker fixture' \
         "/home/$user/bin/start-docker"
+    assert_user_output "$user workload uses the per-user Docker socket" \
+        "$user" 'Hello from Docker' \
+        'DOCKER_HOST=unix:///run/user/$(id -u)/docker.sock docker run --rm hello-world'
 done
 assert_container 'deployed launcher matches the canonical source' \
     'cmp -s /home/coding/start.sh /src/hosts/ex44/start.sh'

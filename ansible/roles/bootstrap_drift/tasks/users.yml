@@ -83,11 +83,16 @@
   loop: "{{ bootstrap_users }}"
   when: bootstrap_manage_user_dotfiles | bool
 
-- name: Configure subuid and subgid ranges for rootless Docker
+- name: Gather bootstrap user IDs for rootless Docker runtime paths
+  ansible.builtin.getent:
+    database: passwd
+  when: bootstrap_manage_rootless_docker | bool
+
+- name: Configure non-overlapping subuid ranges for rootless Docker
   ansible.builtin.lineinfile:
     path: "{{ item.0 }}"
     regexp: "^{{ item.1 | regex_escape }}:"
-    line: "{{ item.1 }}:100000:65536"
+    line: "{{ item.1 }}:{{ bootstrap_rootless_docker_subid_start + (bootstrap_users.index(item.1) | int) * bootstrap_rootless_docker_subid_size }}:{{ bootstrap_rootless_docker_subid_size }}"
     create: true
     owner: root
     group: root
@@ -102,13 +107,42 @@
   loop: "{{ bootstrap_users }}"
   when: bootstrap_manage_rootless_docker | bool
 
+- name: Ensure rootless Docker runtime directories exist for bootstrap users
+  ansible.builtin.file:
+    path: "/run/user/{{ ansible_facts.getent_passwd[item][1] }}"
+    state: directory
+    owner: "{{ item }}"
+    group: "{{ item }}"
+    mode: "0700"
+  loop: "{{ bootstrap_users }}"
+  when: bootstrap_manage_rootless_docker | bool
+
 - name: Install rootless Docker user services when requested
-  ansible.builtin.command:
-    cmd: dockerd-rootless-setuptool.sh install
+  ansible.builtin.shell: |
+    set -eu
+    setup_tool="$(command -v dockerd-rootless-setuptool.sh || true)"
+    if [ -z "$setup_tool" ] && [ -x /usr/share/docker.io/contrib/dockerd-rootless-setuptool.sh ]; then
+      setup_tool=/usr/share/docker.io/contrib/dockerd-rootless-setuptool.sh
+    fi
+    test -n "$setup_tool"
+    export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+    "$setup_tool" install
+  args:
+    executable: /bin/bash
     creates: "/home/{{ item }}/.config/systemd/user/docker.service"
   become_user: "{{ item }}"
   environment:
     HOME: "/home/{{ item }}"
     USER: "{{ item }}"
+  loop: "{{ bootstrap_users }}"
+  when: bootstrap_manage_rootless_docker | bool
+
+- name: Enable rootless Docker service in each user manager
+  ansible.builtin.file:
+    path: "/home/{{ item }}/.config/systemd/user/default.target.wants/docker.service"
+    src: ../docker.service
+    state: link
+    owner: "{{ item }}"
+    group: "{{ item }}"
   loop: "{{ bootstrap_users }}"
   when: bootstrap_manage_rootless_docker | bool

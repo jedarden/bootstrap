@@ -5,6 +5,7 @@ export XDG_CACHE_HOME="$HOME/.cache"
 # Rootless Docker is opt-in and only adds the environment when enabled.
 {% if bootstrap_manage_rootless_docker | bool %}
 export PATH="$HOME/bin:$PATH"
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 export DOCKER_HOST="unix://$XDG_RUNTIME_DIR/docker.sock"
 {% endif %}
 

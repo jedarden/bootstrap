@@ -140,11 +140,48 @@ CLAUDE_INSTALL
                 ;;
         esac
         ;;
-    hostnamectl|loginctl|reboot)
+    hostnamectl|reboot)
+        exit 0
+        ;;
+    loginctl)
+        if [[ "${1:-}" == enable-linger ]]; then
+            user=${2:?missing linger user}
+            mkdir -p /var/lib/systemd/linger
+            touch "/var/lib/systemd/linger/$user"
+        fi
         exit 0
         ;;
     systemctl)
         case "${1:-}" in
+            disable)
+                for unit in "${@:3}"; do
+                    case "$unit" in
+                        docker.service|docker.socket)
+                            touch "$state/system-docker-disabled"
+                            rm -f /run/docker.sock
+                            ;;
+                    esac
+                done
+                exit 0
+                ;;
+            is-enabled)
+                unit="${2:-}"
+                if [[ "$unit" == docker.service && -f "$state/system-docker-disabled" ]]; then
+                    echo disabled
+                    exit 0
+                fi
+                echo enabled
+                exit 0
+                ;;
+            is-active)
+                unit="${2:-}"
+                if [[ "$unit" == docker.service && -f "$state/system-docker-disabled" ]]; then
+                    echo inactive
+                    exit 0
+                fi
+                echo active
+                exit 0
+                ;;
             enable)
                 unit="${3:-${2:-}}"
                 if [[ "$unit" == tailscaled ]]; then
@@ -283,12 +320,17 @@ SSHD
         echo 'bootstrap-test.tailnet.ts.net'
         ;;
     docker)
+        [[ $EUID -ne 0 ]] || {
+            echo 'rootless Docker must not be queried as root' >&2
+            exit 1
+        }
+        expected_docker_host="unix:///run/user/$(id -u)/docker.sock"
+        [[ "${DOCKER_HOST:-}" == "$expected_docker_host" ]] || {
+            echo "rootless Docker fixture requires DOCKER_HOST=$expected_docker_host" >&2
+            exit 1
+        }
         case "${1:-}" in
             info)
-                [[ $EUID -ne 0 ]] || {
-                    echo 'rootless Docker must not be queried as root' >&2
-                    exit 1
-                }
                 echo 'Rootless Docker fixture'
                 ;;
             run) echo 'Hello from Docker';;
@@ -303,6 +345,12 @@ SSHD
         cat > "$HOME/.config/systemd/user/docker.service" <<'DOCKER_SERVICE'
 [Unit]
 Description=Rootless Docker fixture
+
+[Service]
+ExecStart=/usr/bin/dockerd-rootless.sh
+
+[Install]
+WantedBy=default.target
 DOCKER_SERVICE
         ;;
     restic)
@@ -444,12 +492,17 @@ for path in \
     /home/coding/.local/bin/start \
     /home/coding/bin/start-docker \
     /home/coding/.config/systemd/user/docker.service \
+    /home/coding/.config/systemd/user/default.target.wants/docker.service \
     /home/trading/.bashrc \
     /home/trading/.tmux.conf \
     /home/trading/start.sh \
     /home/trading/.local/bin/start \
     /home/trading/bin/start-docker \
     /home/trading/.config/systemd/user/docker.service \
+    /home/trading/.config/systemd/user/default.target.wants/docker.service \
+    /var/lib/bootstrap-test/system-docker-disabled \
+    /var/lib/systemd/linger/coding \
+    /var/lib/systemd/linger/trading \
     /var/lib/bootstrap-test/ufw.rules $\
     /var/lib/bootstrap-test/restic-repository-created; do
     [[ -e "$path" || -L "$path" ]] || continue

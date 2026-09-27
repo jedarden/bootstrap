@@ -34,6 +34,13 @@ operator manages separately. Authorized-key replacement is opt-in with
 `bootstrap_manage_authorized_keys: true`; keep it false until every key is
 present in the encrypted inventory.
 
+Rootless Docker is opt-in with `bootstrap_manage_rootless_docker: true`. It
+installs the Docker client and rootless runtime prerequisites, allocates
+non-overlapping subordinate UID/GID ranges, disables the system daemon,
+enables lingering and the per-user `docker.service`, and exports each user's
+`/run/user/<uid>/docker.sock` through the managed shell block. The rootful and
+rootless Docker flags are mutually exclusive.
+
 ## First use
 
 Install the pinned collection dependencies, copy the example inventory, and

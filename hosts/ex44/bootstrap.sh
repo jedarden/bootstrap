@@ -139,7 +139,30 @@ if [[ "${1:-}" == "--verify" ]] || [[ "${1:-}" == "--check" ]]; then
     echo ""
     echo "=== Docker ==="
     run_check "Docker installed" "command -v docker" "."
-    run_check "Docker can run containers" "docker run --rm hello-world 2>&1 | head -5" "Hello from Docker"
+    run_check "Docker system daemon disabled" \
+        "systemctl is-enabled docker.service 2>&1 || true" "disabled|masked"
+    run_check "Docker system daemon inactive" \
+        "systemctl is-active docker.service 2>&1 || true" "inactive|failed|unknown|not-found"
+
+    # The bootstrap installs Docker's client and rootless daemon helper as
+    # root, but all workloads must use a per-user daemon.  Verify that
+    # contract by asking the first configured user to run the workload with
+    # the runtime socket explicitly selected.  Calling `docker` directly as
+    # root here would make this check accidentally pass against rootful
+    # Docker's /run/docker.sock.
+    verification_user=""
+    verification_config_file=/etc/bootstrap/config
+    if [[ -r "$verification_config_file" ]]; then
+        configured_users=$(sed -n 's/^USERS="\([^"]*\)"$/\1/p' "$verification_config_file")
+        verification_user="${configured_users%% *}"
+    fi
+    if [[ -n "$verification_user" ]]; then
+        run_check "Docker workload runs through rootless socket" \
+            "su -s /bin/bash '$verification_user' -c 'export XDG_RUNTIME_DIR=/run/user/\$(id -u); export DOCKER_HOST=unix://\$XDG_RUNTIME_DIR/docker.sock; docker run --rm hello-world' 2>&1 | head -5" \
+            "Hello from Docker"
+    else
+        run_check "Rootless Docker user is configured" "false" "."
+    fi
 
     echo ""
     echo "=== Security Services ==="
@@ -1890,6 +1913,7 @@ apt-get install -y \
     uidmap \
     dbus-user-session \
     fuse-overlayfs \
+    rootlesskit \
     slirp4netns
 
 # Install Docker if not present (idempotent)
@@ -1906,23 +1930,50 @@ fi
 # Disable system Docker daemon - we'll use rootless per-user (idempotent)
 systemctl disable --now docker.service docker.socket 2>/dev/null || true
 
+# Rootless Docker needs one non-overlapping subordinate UID/GID range per
+# configured user.  Reconcile the complete managed line on every run so a
+# stale or duplicated entry cannot silently keep the old mapping.
+ROOTLESS_DOCKER_SUBID_START=100000
+ROOTLESS_DOCKER_SUBID_SIZE=65536
+ensure_subordinate_id_range() {
+    local path="$1"
+    local user="$2"
+    local start="$3"
+
+    touch "$path"
+    sed -i "/^${user}:/d" "$path"
+    printf '%s:%s:%s\n' "$user" "$start" "$ROOTLESS_DOCKER_SUBID_SIZE" >> "$path"
+    chown root:root "$path"
+    chmod 0644 "$path"
+}
+
+# Debian's package keeps the setup helper under /usr/share, while Docker's
+# upstream installer places it on PATH.  Support both layouts without ever
+# running the helper as root.
+ROOTLESS_SETUP_TOOL="$(command -v dockerd-rootless-setuptool.sh || true)"
+if [[ -z "$ROOTLESS_SETUP_TOOL" && -x /usr/share/docker.io/contrib/dockerd-rootless-setuptool.sh ]]; then
+    ROOTLESS_SETUP_TOOL=/usr/share/docker.io/contrib/dockerd-rootless-setuptool.sh
+fi
+if [[ -z "$ROOTLESS_SETUP_TOOL" ]]; then
+    echo "ERROR: dockerd-rootless-setuptool.sh is not installed" >&2
+    exit 1
+fi
+
 # Configure rootless Docker for each user
-for user in "${USERS[@]}"; do
+for user_index in "${!USERS[@]}"; do
+    user="${USERS[$user_index]}"
     echo "Setting up rootless Docker for user: $user"
 
     # Get user's UID
     USER_UID=$(id -u "$user")
+    USER_SUBID_START=$((ROOTLESS_DOCKER_SUBID_START + user_index * ROOTLESS_DOCKER_SUBID_SIZE))
 
     # Enable lingering so user services start at boot
     loginctl enable-linger "$user"
 
     # Set up subuid/subgid ranges for user namespace mapping
-    if ! grep -q "^$user:" /etc/subuid; then
-        echo "$user:100000:65536" >> /etc/subuid
-    fi
-    if ! grep -q "^$user:" /etc/subgid; then
-        echo "$user:100000:65536" >> /etc/subgid
-    fi
+    ensure_subordinate_id_range /etc/subuid "$user" "$USER_SUBID_START"
+    ensure_subordinate_id_range /etc/subgid "$user" "$USER_SUBID_START"
 
     # Create XDG_RUNTIME_DIR if needed
     mkdir -p "/run/user/$USER_UID"
@@ -1931,12 +1982,19 @@ for user in "${USERS[@]}"; do
 
     # Install rootless Docker as the user (idempotent - checks if already installed)
     if [[ ! -f "/home/$user/.config/systemd/user/docker.service" ]]; then
-        su - "$user" -c 'dockerd-rootless-setuptool.sh install' || {
-            echo "Warning: Rootless Docker setup for $user may need manual completion after first login"
+        su - "$user" -c "export XDG_RUNTIME_DIR=/run/user/\$(id -u); '$ROOTLESS_SETUP_TOOL' install" || {
+            echo "ERROR: Rootless Docker setup failed for $user" >&2
+            exit 1
         }
     else
         echo "Rootless Docker already configured for $user"
     fi
+
+    # Enable the per-user service without requiring a live user D-Bus session
+    # during bootstrap.  This is the same target symlink that
+    # `systemctl --user enable docker` creates, and lingering starts the user
+    # manager again after reboot.
+    su - "$user" -c 'mkdir -p "$HOME/.config/systemd/user/default.target.wants" && ln -sfn ../docker.service "$HOME/.config/systemd/user/default.target.wants/docker.service"'
 
     # Add Docker environment to user's bashrc (idempotent)
     if ! grep -q "# === Rootless Docker ===" "/home/$user/.bashrc" 2>/dev/null; then
@@ -1944,6 +2002,7 @@ for user in "${USERS[@]}"; do
 
 # === Rootless Docker ===
 export PATH="$HOME/bin:$PATH"
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 export DOCKER_HOST="unix://$XDG_RUNTIME_DIR/docker.sock"
 DOCKERENV
     fi
@@ -1952,6 +2011,9 @@ DOCKERENV
     mkdir -p "/home/$user/bin"
     cat > "/home/$user/bin/start-docker" << 'STARTDOCKER'
 #!/bin/bash
+set -euo pipefail
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+export DOCKER_HOST="${DOCKER_HOST:-unix://$XDG_RUNTIME_DIR/docker.sock}"
 # Start rootless Docker daemon if not running
 if ! docker info &>/dev/null; then
     echo "Starting rootless Docker daemon..."

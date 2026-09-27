@@ -112,6 +112,15 @@ bootstrap_manage_firewall: true
 
 bootstrap_manage_system_docker: false
 bootstrap_manage_rootless_docker: false
+bootstrap_rootless_docker_packages:
+  - docker.io
+  - dbus-user-session
+  - fuse-overlayfs
+  - rootlesskit
+  - slirp4netns
+  - uidmap
+bootstrap_rootless_docker_subid_start: 100000
+bootstrap_rootless_docker_subid_size: 65536
 
 bootstrap_backup_enabled: false
 bootstrap_restic_env: {}

@@ -172,11 +172,8 @@ CLAUDE_INSTALL
                 echo '* Applying /etc/sysctl.d/99-hardening.conf'
                 ;;
             -n)
-                case "${2:-}" in
-                    net.ipv4.conf.all.rp_filter|net.ipv4.tcp_syncookies) echo 1 ;;
-                    kernel.randomize_va_space) echo 2 ;;
-                    *) echo 0 ;;
-                esac
+                awk -v key="${2:-}" '$1 == key { print $3; found = 1 } END { exit !found }' \
+                    /etc/sysctl.d/99-hardening.conf
                 ;;
         esac
         ;;
@@ -223,6 +220,10 @@ allowagentforwarding no
 permittunnel no
 gatewayports no
 permituserenvironment no
+protocol 2
+ciphers chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.com
+macs hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com
+kexalgorithms curve25519-sha256,curve25519-sha256@libssh.org
 SSHD
         fi
         ;;
@@ -234,17 +235,7 @@ SSHD
         ;;
     auditctl)
         if [[ "${1:-}" == -l ]]; then
-            echo '-w /etc/sudoers -p wa -k sudoers'
-            echo '-w /etc/sudoers.d/ -p wa -k sudoers'
-            echo '-w /etc/passwd -p wa -k identity'
-            echo '-w /etc/group -p wa -k identity'
-            echo '-w /etc/shadow -p wa -k identity'
-            echo '-w /etc/ssh/sshd_config -p wa -k sshd'
-            echo '-w /etc/ssh/sshd_config.d/ -p wa -k sshd'
-            echo '-w /etc/crontab -p wa -k cron'
-            echo '-w /etc/cron.d/ -p wa -k cron'
-            echo '-w /etc/hosts -p wa -k hosts'
-            echo '-w /etc/network/ -p wa -k network'
+            grep -E '^-w |^-[Dbf]($| )' /etc/audit/rules.d/hardening.rules
         fi
         ;;
     jq)

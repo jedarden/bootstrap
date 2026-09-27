@@ -96,7 +96,16 @@ if [[ "${1:-}" == "--verify" ]] || [[ "${1:-}" == "--check" ]]; then
     echo "=== Firewall ==="
     run_check "UFW active" "ufw status" "^Status: active"
     run_check "UFW default incoming policy" "ufw status verbose | grep 'Default:'" "deny.*incoming"
+    run_check "UFW default outgoing policy" "ufw status verbose | grep 'Default:'" "allow.*outgoing"
     run_check "UFW allows Tailscale" "ufw status verbose | grep 'tailscale0'" "ALLOW"
+    for rescue_network in \
+        213.133.99.0/24 \
+        213.133.100.0/24 \
+        88.198.230.0/24 \
+        88.198.231.0/24; do
+        run_check "UFW allows rescue ${rescue_network}" \
+            "ufw status verbose | grep -F '${rescue_network}'" "ALLOW"
+    done
 
     echo ""
     echo "=== Tailscale ==="
@@ -108,10 +117,24 @@ if [[ "${1:-}" == "--verify" ]] || [[ "${1:-}" == "--check" ]]; then
 
     echo ""
     echo "=== SSH Hardening ==="
-    run_check "PermitRootLogin prohibited" "sshd -T | grep permitrootlogin" "prohibit-password|no"
-    run_check "PasswordAuthentication disabled" "sshd -T | grep passwordauthentication" "no"
-    run_check "PubkeyAuthentication enabled" "sshd -T | grep pubkeyauthentication" "yes"
-    run_check "MaxAuthTries limited" "sshd -T | grep maxauthtries" "[1-6]"
+    run_check "PermitRootLogin is key-only" "sshd -T | grep permitrootlogin" "^permitrootlogin prohibit-password$"
+    run_check "PasswordAuthentication disabled" "sshd -T | grep passwordauthentication" "^passwordauthentication no$"
+    run_check "PubkeyAuthentication enabled" "sshd -T | grep pubkeyauthentication" "^pubkeyauthentication yes$"
+    run_check "AuthenticationMethods requires public keys" "sshd -T | grep authenticationmethods" "^authenticationmethods publickey$"
+    run_check "SSH user allowlist includes root" "sshd -T | grep allowusers" "^allowusers root( |$)"
+    run_check "MaxAuthTries limited" "sshd -T | grep maxauthtries" "^maxauthtries 3$"
+    run_check "X11 forwarding disabled" "sshd -T | grep x11forwarding" "^x11forwarding no$"
+    run_check "TCP forwarding remains enabled" "sshd -T | grep allowtcpforwarding" "^allowtcpforwarding yes$"
+    run_check "Agent forwarding disabled" "sshd -T | grep allowagentforwarding" "^allowagentforwarding no$"
+    run_check "SSH tunnels disabled" "sshd -T | grep permittunnel" "^permittunnel no$"
+    run_check "SSH gateway ports disabled" "sshd -T | grep gatewayports" "^gatewayports no$"
+    run_check "SSH user environment disabled" "sshd -T | grep permituserenvironment" "^permituserenvironment no$"
+    run_check "SSH protocol and cipher policy" \
+        "sshd -T | grep -Fx 'protocol 2' && \
+         sshd -T | grep -Fx 'ciphers chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.com' && \
+         sshd -T | grep -Fx 'macs hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com' && \
+         sshd -T | grep -Fx 'kexalgorithms curve25519-sha256,curve25519-sha256@libssh.org'" \
+        "^kexalgorithms "
 
     echo ""
     echo "=== Docker ==="
@@ -122,14 +145,62 @@ if [[ "${1:-}" == "--verify" ]] || [[ "${1:-}" == "--check" ]]; then
     echo "=== Security Services ==="
     run_check "fail2ban installed" "command -v fail2ban-client" "."
     run_check "fail2ban sshd jail active" "fail2ban-client status sshd" "Status for the jail: sshd"
+    run_check "fail2ban enforces three-attempt UFW bans" \
+        "grep -Fx 'maxretry = 3' /etc/fail2ban/jail.local && \
+         grep -Fx 'banaction = ufw' /etc/fail2ban/jail.local && \
+         grep -Fx 'enabled = true' /etc/fail2ban/jail.local && \
+         grep -Fx 'port = ssh' /etc/fail2ban/jail.local" \
+        "^port = ssh$"
     run_check "auditd installed" "command -v auditctl" "."
-    run_check "auditd has rules" "auditctl -l" "^-w /etc"
+    run_check "auditd watches sudoers" \
+        "auditctl -l | grep -Fx -- '-w /etc/sudoers -p wa -k sudoers' && \
+         auditctl -l | grep -Fx -- '-w /etc/sudoers.d/ -p wa -k sudoers'" \
+        "^-w /etc/sudoers.d/ -p wa -k sudoers$"
+    run_check "auditd watches identity files" \
+        "auditctl -l | grep -Fx -- '-w /etc/passwd -p wa -k identity' && \
+         auditctl -l | grep -Fx -- '-w /etc/group -p wa -k identity' && \
+         auditctl -l | grep -Fx -- '-w /etc/shadow -p wa -k identity'" \
+        "^-w /etc/shadow -p wa -k identity$"
+    run_check "auditd watches SSH configuration" \
+        "auditctl -l | grep -Fx -- '-w /etc/ssh/sshd_config -p wa -k sshd' && \
+         auditctl -l | grep -Fx -- '-w /etc/ssh/sshd_config.d/ -p wa -k sshd'" \
+        "^-w /etc/ssh/sshd_config.d/ -p wa -k sshd$"
+    run_check "auditd watches scheduled jobs" \
+        "auditctl -l | grep -Fx -- '-w /etc/crontab -p wa -k cron' && \
+         auditctl -l | grep -Fx -- '-w /etc/cron.d/ -p wa -k cron'" \
+        "^-w /etc/cron.d/ -p wa -k cron$"
+    run_check "auditd watches network configuration" \
+        "auditctl -l | grep -Fx -- '-w /etc/hosts -p wa -k hosts' && \
+         auditctl -l | grep -Fx -- '-w /etc/network/ -p wa -k network'" \
+        "^-w /etc/network/ -p wa -k network$"
 
     echo ""
     echo "=== Kernel Hardening ==="
-    run_check "rp_filter enabled" "sysctl -n net.ipv4.conf.all.rp_filter" "1"
-    run_check "tcp_syncookies enabled" "sysctl -n net.ipv4.tcp_syncookies" "1"
-    run_check "ASLR enabled" "sysctl -n kernel.randomize_va_space" "2"
+    run_check "IPv4 reverse-path filtering (all)" "sysctl -n net.ipv4.conf.all.rp_filter" "^1$"
+    run_check "IPv4 reverse-path filtering (default)" "sysctl -n net.ipv4.conf.default.rp_filter" "^1$"
+    run_check "ICMP broadcast requests ignored" "sysctl -n net.ipv4.icmp_echo_ignore_broadcasts" "^1$"
+    run_check "IPv4 source routing (all) disabled" "sysctl -n net.ipv4.conf.all.accept_source_route" "^0$"
+    run_check "IPv4 source routing (default) disabled" "sysctl -n net.ipv4.conf.default.accept_source_route" "^0$"
+    run_check "IPv6 source routing (all) disabled" "sysctl -n net.ipv6.conf.all.accept_source_route" "^0$"
+    run_check "IPv6 source routing (default) disabled" "sysctl -n net.ipv6.conf.default.accept_source_route" "^0$"
+    run_check "IPv4 send redirects (all) disabled" "sysctl -n net.ipv4.conf.all.send_redirects" "^0$"
+    run_check "IPv4 send redirects (default) disabled" "sysctl -n net.ipv4.conf.default.send_redirects" "^0$"
+    run_check "TCP SYN cookies enabled" "sysctl -n net.ipv4.tcp_syncookies" "^1$"
+    run_check "TCP SYN backlog hardened" "sysctl -n net.ipv4.tcp_max_syn_backlog" "^2048$"
+    run_check "TCP SYN-ACK retries limited" "sysctl -n net.ipv4.tcp_synack_retries" "^2$"
+    run_check "TCP SYN retries bounded" "sysctl -n net.ipv4.tcp_syn_retries" "^5$"
+    run_check "Martian packets logged" "sysctl -n net.ipv4.conf.all.log_martians" "^1$"
+    run_check "Bogus ICMP errors ignored" "sysctl -n net.ipv4.icmp_ignore_bogus_error_responses" "^1$"
+    run_check "IPv4 redirects (all) disabled" "sysctl -n net.ipv4.conf.all.accept_redirects" "^0$"
+    run_check "IPv4 redirects (default) disabled" "sysctl -n net.ipv4.conf.default.accept_redirects" "^0$"
+    run_check "IPv6 redirects (all) disabled" "sysctl -n net.ipv6.conf.all.accept_redirects" "^0$"
+    run_check "IPv6 redirects (default) disabled" "sysctl -n net.ipv6.conf.default.accept_redirects" "^0$"
+    run_check "ASLR enabled" "sysctl -n kernel.randomize_va_space" "^2$"
+    run_check "Kernel pointer exposure restricted" "sysctl -n kernel.kptr_restrict" "^2$"
+    run_check "Kernel logs restricted" "sysctl -n kernel.dmesg_restrict" "^1$"
+    run_check "Setuid core dumps disabled" "sysctl -n fs.suid_dumpable" "^0$"
+    run_check "Hardlink protection enabled" "sysctl -n fs.protected_hardlinks" "^1$"
+    run_check "Symlink protection enabled" "sysctl -n fs.protected_symlinks" "^1$"
 
     echo ""
     echo "=== Backup Configuration ==="

@@ -7,7 +7,7 @@ Bootstrap script for Hetzner EX44 dedicated server. Sets up a hardened, multi-us
 1. **System Update** - Updates packages
 2. **Package Install** - Comprehensive dev and sysadmin tools
 3. **User Creation** - Isolated users (`coding`, `trading`)
-4. **SSH Hardening** - Key-only, no root, protocol hardening
+4. **SSH Hardening** - Key-only root emergency access, protocol hardening
 5. **Kernel Hardening** - sysctl security settings
 6. **Firewall** - UFW: deny all except Tailscale + Hetzner rescue
 7. **Tailscale** - Secure mesh access with SSH
@@ -385,20 +385,32 @@ Run it as root (or with `sudo`): the UFW, `sshd -T`, fail2ban and auditd checks 
 === Firewall ===
 UFW active:                              ✓ PASS
 UFW default incoming policy:             ✓ PASS
+UFW default outgoing policy:             ✓ PASS
 UFW allows Tailscale:                    ✓ PASS
+UFW allows rescue 213.133.99.0/24:       ✓ PASS
 
 === Tailscale ===
 Tailscale connected:                     ✓ PASS
 
 === SSH Hardening ===
-PermitRootLogin prohibited:              ✓ PASS
+PermitRootLogin is key-only:             ✓ PASS
 PasswordAuthentication disabled:         ✗ FAIL (got: passwordauthentication yes)
 PubkeyAuthentication enabled:            ✓ PASS
+AuthenticationMethods requires public keys: ✓ PASS
 MaxAuthTries limited:                    ✓ PASS
 
+=== Security Services ===
+fail2ban enforces three-attempt UFW bans: ✓ PASS
+auditd watches SSH configuration:        ✓ PASS
+
+=== Kernel Hardening ===
+IPv4 reverse-path filtering (all):       ✓ PASS
+TCP SYN cookies enabled:                 ✓ PASS
+ASLR enabled:                            ✓ PASS
+
 === Summary ===
-Total checks: 20
-Passed:       19
+Total checks: 61
+Passed:       60
 Failed:       1
 Skipped:      0
 

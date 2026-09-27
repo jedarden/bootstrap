@@ -237,6 +237,80 @@ assert_file_contains 'sysctl disables IPv4 redirects' \
     /etc/sysctl.d/99-hardening.conf 'net.ipv4.conf.all.accept_redirects = 0'
 assert_file_contains 'sysctl disables IPv6 redirects' \
     /etc/sysctl.d/99-hardening.conf 'net.ipv6.conf.all.accept_redirects = 0'
+while IFS= read -r setting; do
+    [[ -z "$setting" ]] || assert_file_contains "sysctl baseline includes $setting" \
+        /etc/sysctl.d/99-hardening.conf "$setting"
+done <<'SYSCTL_BASELINE'
+net.ipv4.conf.all.rp_filter = 1
+net.ipv4.conf.default.rp_filter = 1
+net.ipv4.icmp_echo_ignore_broadcasts = 1
+net.ipv4.conf.all.accept_source_route = 0
+net.ipv4.conf.default.accept_source_route = 0
+net.ipv6.conf.all.accept_source_route = 0
+net.ipv6.conf.default.accept_source_route = 0
+net.ipv4.conf.all.send_redirects = 0
+net.ipv4.conf.default.send_redirects = 0
+net.ipv4.tcp_syncookies = 1
+net.ipv4.tcp_max_syn_backlog = 2048
+net.ipv4.tcp_synack_retries = 2
+net.ipv4.tcp_syn_retries = 5
+net.ipv4.conf.all.log_martians = 1
+net.ipv4.icmp_ignore_bogus_error_responses = 1
+net.ipv4.conf.all.accept_redirects = 0
+net.ipv4.conf.default.accept_redirects = 0
+net.ipv6.conf.all.accept_redirects = 0
+net.ipv6.conf.default.accept_redirects = 0
+kernel.randomize_va_space = 2
+kernel.kptr_restrict = 2
+kernel.dmesg_restrict = 1
+fs.suid_dumpable = 0
+fs.protected_hardlinks = 1
+fs.protected_symlinks = 1
+SYSCTL_BASELINE
+while IFS= read -r setting; do
+    [[ -z "$setting" ]] || assert_file_contains "SSH baseline includes $setting" \
+        /etc/ssh/sshd_config.d/hardening.conf "$setting"
+done <<'SSH_BASELINE'
+PermitRootLogin prohibit-password
+PasswordAuthentication no
+PermitEmptyPasswords no
+PubkeyAuthentication yes
+AuthenticationMethods publickey
+ChallengeResponseAuthentication no
+UsePAM yes
+AllowUsers root coding trading
+MaxAuthTries 3
+MaxSessions 10
+LoginGraceTime 20
+ClientAliveInterval 300
+ClientAliveCountMax 2
+X11Forwarding no
+AllowTcpForwarding yes
+AllowAgentForwarding no
+PermitTunnel no
+GatewayPorts no
+PermitUserEnvironment no
+Protocol 2
+Ciphers chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.com
+MACs hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com
+KexAlgorithms curve25519-sha256,curve25519-sha256@libssh.org
+SSH_BASELINE
+while IFS= read -r rule; do
+    [[ -z "$rule" ]] || assert_file_contains "auditd baseline includes $rule" \
+        /etc/audit/rules.d/hardening.rules "$rule"
+done <<'AUDIT_BASELINE'
+-w /etc/sudoers -p wa -k sudoers
+-w /etc/sudoers.d/ -p wa -k sudoers
+-w /etc/passwd -p wa -k identity
+-w /etc/group -p wa -k identity
+-w /etc/shadow -p wa -k identity
+-w /etc/ssh/sshd_config -p wa -k sshd
+-w /etc/ssh/sshd_config.d/ -p wa -k sshd
+-w /etc/crontab -p wa -k cron
+-w /etc/cron.d/ -p wa -k cron
+-w /etc/hosts -p wa -k hosts
+-w /etc/network/ -p wa -k network
+AUDIT_BASELINE
 assert_container 'effective sysctl values are hardened' \
     "[[ \$(sysctl -n net.ipv4.conf.all.rp_filter) == 1 ]] && \\
      [[ \$(sysctl -n net.ipv4.tcp_syncookies) == 1 ]] && \\
@@ -259,6 +333,22 @@ assert_container 'auditd rules are queryable' \
     "auditctl -l | grep -Fq -- '-w /etc/passwd -p wa -k identity' && \\
      auditctl -l | grep -Fq -- '-w /etc/ssh/sshd_config.d/ -p wa -k sshd' && \\
      auditctl -l | grep -Fq -- '-w /etc/cron.d/ -p wa -k cron'"
+assert_file_contains 'fail2ban records an enabled SSH jail' \
+    /etc/fail2ban/jail.local 'enabled = true'
+assert_file_contains 'fail2ban uses the SSH service port' \
+    /etc/fail2ban/jail.local 'port = ssh'
+assert_file_contains 'SSH keeps modern protocol settings' \
+    /etc/ssh/sshd_config.d/hardening.conf 'KexAlgorithms curve25519-sha256,curve25519-sha256@libssh.org'
+for rescue_network in \
+    213.133.99.0/24 \
+    213.133.100.0/24 \
+    88.198.230.0/24 \
+    88.198.231.0/24; do
+    assert_container "UFW allows rescue network $rescue_network" \
+        "ufw status verbose | grep -Fq '$rescue_network'"
+done
+assert_container 'UFW allows outbound traffic by default' \
+    "ufw status verbose | grep -Fq 'Default: allow outgoing'"
 assert_file_contains 'backup script is installed' \
     /usr/local/bin/backup-home 'restic backup'
 assert_file_contains 'backup schedule is installed' \
@@ -426,5 +516,22 @@ assert_container 'second run preserves both users ownership boundaries' \
      [[ $(stat -c %U:%G:%a /home/trading) == trading:trading:700 ]] && \
      [[ $(grep -Fc "coding:" /etc/subuid) -eq 1 ]] && \
      [[ $(grep -Fc "trading:" /etc/subuid) -eq 1 ]]'
+
+verify_output="$TMP/verify-output"
+if ! docker exec "$CONTAINER" bash /test/bootstrap-under-test.sh --verify > "$verify_output" 2>&1; then
+    echo 'bootstrap --verify failed after the idempotence run; output follows:' >&2
+    cat "$verify_output" >&2
+    exit 1
+fi
+grep -Fq 'Failed:       0' "$verify_output" || {
+    echo 'bootstrap --verify reported failed checks; output follows:' >&2
+    cat "$verify_output" >&2
+    exit 1
+}
+grep -Fq 'UFW allows rescue 213.133.99.0/24:' "$verify_output"
+grep -Fq 'SSH protocol and cipher policy:' "$verify_output"
+grep -Fq 'fail2ban enforces three-attempt UFW bans:' "$verify_output"
+grep -Fq 'auditd watches network configuration:' "$verify_output"
+grep -Fq 'Kernel pointer exposure restricted:' "$verify_output"
 
 echo 'Bootstrap integration and idempotence tests passed.'

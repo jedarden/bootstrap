@@ -1,0 +1,10 @@
+---
+- name: Reconcile post-bootstrap configuration drift
+  hosts: ex44
+  become: true
+  gather_facts: true
+
+  roles:
+    - role: bootstrap_drift
+      tags:
+        - drift

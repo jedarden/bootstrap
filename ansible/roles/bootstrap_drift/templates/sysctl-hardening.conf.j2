@@ -1,0 +1,4 @@
+# Managed by bootstrap/ansible.
+{% for key, value in bootstrap_sysctl_settings.items() %}
+{{ key }} = {{ value }}
+{% endfor %}

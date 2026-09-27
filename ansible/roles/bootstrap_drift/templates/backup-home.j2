@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+PRUNE=false
+[[ "${1:-}" == "--prune" ]] && PRUNE=true
+source /etc/restic/b2.env
+
+restic backup \
+    --pack-size 64 \
+    --one-file-system \
+    --exclude='.cache' \
+    --exclude='node_modules' \
+    --exclude='.npm' \
+    --exclude='__pycache__' \
+    --exclude='.venv' \
+    --exclude='venv' \
+    --exclude='.local/share/docker/overlay2' \
+    --exclude='.local/share/docker/buildkit' \
+    --exclude='.local/share/docker/tmp' \
+    --exclude='*.log' \
+    --exclude='*.tmp' \
+    /home \
+    /var/lib/tailscale
+
+if $PRUNE; then
+    restic forget --keep-daily 7 --keep-weekly 4 --keep-monthly 6 --prune
+fi
+
+restic check --read-data-subset=5%

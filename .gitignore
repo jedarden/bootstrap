@@ -18,3 +18,8 @@
 .beads/*.temp
 .beads/*.journal
 .br_recovery/
+
+# Local Ansible inventory and host variables may contain addresses or secrets.
+ansible/inventory/hosts.yml
+ansible/group_vars/*.yml
+!ansible/group_vars/*.example.yml

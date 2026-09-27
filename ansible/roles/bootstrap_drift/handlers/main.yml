@@ -1,0 +1,28 @@
+---
+- name: Validate and reload SSH
+  ansible.builtin.command: "sshd -t"
+  listen: Validate and reload SSH
+  changed_when: false
+  notify: Reload SSH service
+
+- name: Reload SSH service
+  ansible.builtin.service:
+    name: "{{ bootstrap_ssh_service }}"
+    state: reloaded
+  listen: Reload SSH service
+
+- name: Reload sysctl settings
+  ansible.builtin.command: sysctl --system
+  listen: Reload sysctl settings
+  changed_when: false
+
+- name: Restart fail2ban
+  ansible.builtin.service:
+    name: fail2ban
+    state: restarted
+  listen: Restart fail2ban
+
+- name: Reload audit rules
+  ansible.builtin.command: augenrules --load
+  listen: Reload audit rules
+  changed_when: false

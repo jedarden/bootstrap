@@ -1,0 +1,78 @@
+---
+- name: Validate backup variables before writing secret material
+  ansible.builtin.assert:
+    that:
+      - bootstrap_restic_env | length > 0
+      - bootstrap_restic_env.B2_ACCOUNT_ID is defined
+      - bootstrap_restic_env.B2_ACCOUNT_KEY is defined
+      - bootstrap_restic_env.RESTIC_REPOSITORY is defined
+      - bootstrap_restic_env.RESTIC_PASSWORD is defined
+    fail_msg: >-
+      Set bootstrap_restic_env from an encrypted inventory variable before
+      enabling bootstrap_backup_enabled.
+  when: bootstrap_backup_enabled | bool
+
+- name: Install restic for managed backups
+  ansible.builtin.apt:
+    name: restic
+    state: present
+  when: bootstrap_backup_enabled | bool
+
+- name: Ensure restic configuration directory exists
+  ansible.builtin.file:
+    path: /etc/restic
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+  when: bootstrap_backup_enabled | bool
+
+- name: Reconcile restic environment securely
+  ansible.builtin.template:
+    src: restic-env.j2
+    dest: /etc/restic/b2.env
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+  when: bootstrap_backup_enabled | bool
+
+- name: Ensure restic cache directory exists
+  ansible.builtin.file:
+    path: /var/cache/restic
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+  when: bootstrap_backup_enabled | bool
+
+- name: Reconcile backup command scripts
+  ansible.builtin.template:
+    src: "{{ item.src }}"
+    dest: "/usr/local/bin/{{ item.dest }}"
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - {src: backup-home.j2, dest: backup-home}
+    - {src: restore-home.j2, dest: restore-home}
+    - {src: list-backups.j2, dest: list-backups}
+  when: bootstrap_backup_enabled | bool
+
+- name: Reconcile backup schedule
+  ansible.builtin.template:
+    src: restic-backup.cron.j2
+    dest: /etc/cron.d/restic-backup
+    owner: root
+    group: root
+    mode: "0644"
+  when: bootstrap_backup_enabled | bool
+
+- name: Reconcile backup log rotation
+  ansible.builtin.template:
+    src: restic-backup.logrotate.j2
+    dest: /etc/logrotate.d/restic-backup
+    owner: root
+    group: root
+    mode: "0644"
+  when: bootstrap_backup_enabled | bool

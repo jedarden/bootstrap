@@ -1,0 +1,34 @@
+# Managed by bootstrap/ansible. See hosts/ex44/bootstrap.sh.
+
+# Authentication: root is key-only for Hetzner rescue access.
+PermitRootLogin prohibit-password
+PasswordAuthentication no
+PermitEmptyPasswords no
+PubkeyAuthentication yes
+AuthenticationMethods publickey
+ChallengeResponseAuthentication no
+UsePAM yes
+
+# Keep the configured users reachable while excluding unlisted accounts.
+AllowUsers root{% for user in bootstrap_ssh_allow_users %} {{ user }}{% endfor %}
+
+MaxAuthTries 3
+MaxSessions 10
+LoginGraceTime 20
+ClientAliveInterval 300
+ClientAliveCountMax 2
+
+X11Forwarding no
+# TCP forwarding remains enabled for VS Code Remote SSH.
+AllowTcpForwarding yes
+AllowAgentForwarding no
+PermitTunnel no
+GatewayPorts no
+PermitUserEnvironment no
+
+LogLevel VERBOSE
+SyslogFacility AUTH
+Protocol 2
+Ciphers chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.com
+MACs hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com
+KexAlgorithms curve25519-sha256,curve25519-sha256@libssh.org

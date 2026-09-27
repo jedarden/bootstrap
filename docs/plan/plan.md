@@ -644,3 +644,42 @@ contract as a contributor's checkout.
 - A rollback appears as a new release in the version stream. Git history
   remains the source of the restored payload, while the higher version keeps
   all already-deployed launchers eligible for self-update.
+
+## ADR-9: 2026-09-27 — Ansible reconciles stable post-bootstrap state
+
+### Context
+
+The bootstrap script is intentionally interactive and includes operations that
+need credentials or have data-plane side effects. It is a good fresh-host and
+recovery path, but re-running it to repair one changed SSH, sysctl, firewall,
+service, or workspace setting repeats prompts and can touch unrelated state.
+The repository's future-plan entry for Ansible drift management therefore
+needs a bounded, repeatable interface rather than a second copy of the
+bootstrap shell script.
+
+### Decision
+
+Add the `ansible/` role and the `drift.yml` / `check-drift.yml` playbooks. The
+role manages stable Debian/Ubuntu state with Ansible modules and templates:
+packages, configured users/workspaces, SSH and kernel policy, additive UFW
+rules, fail2ban, auditd, unattended-upgrades, cron/fstab/modprobe hardening,
+and opt-in restic configuration. Check mode is the repository's preview path;
+after applying to a selected host, two consecutive check-mode runs are the
+operator's idempotence validation.
+
+Tailscale and Cloudflared enrollment, agent installers, the self-updating
+`start.sh`, backup repository/data operations, and secret values are outside
+the default role. Authorized-key replacement and rootless-Docker setup are
+explicit opt-ins. UFW reconciliation is additive so the role does not delete
+rules owned by an operator or another system.
+
+### Consequences
+
+- Existing hosts can repair configuration drift without rerunning the
+  interactive bootstrap or committing credentials to this repository.
+- The collection requirements and `ansible/validate.sh` provide a local
+  syntax gate; live idempotence remains an explicitly targeted operation
+  because applying it changes host security and service state.
+- New host types must either provide compatible Debian-family variables or
+  add a separate role; this role does not silently broaden itself to another
+  distribution.

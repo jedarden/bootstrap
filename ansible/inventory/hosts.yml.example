@@ -1,0 +1,18 @@
+---
+all:
+  children:
+    ex44:
+      hosts:
+        ex44-primary:
+          ansible_host: ex44.jedarden.com
+          ansible_user: root
+      vars:
+        # Keep this list aligned with the users created by bootstrap.sh.
+        bootstrap_users:
+          - coding
+          - trading
+
+        # Key reconciliation is opt-in to prevent an incomplete inventory
+        # from locking an operator out of a host.
+        bootstrap_manage_authorized_keys: false
+        bootstrap_authorized_keys: {}

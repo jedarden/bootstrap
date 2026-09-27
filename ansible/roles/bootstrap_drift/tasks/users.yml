@@ -1,0 +1,114 @@
+---
+- name: Ensure configured supplementary groups exist
+  ansible.builtin.group:
+    name: "{{ item }}"
+    state: present
+  loop: "{{ bootstrap_user_groups }}"
+
+- name: Ensure each bootstrap user has a private primary group
+  ansible.builtin.group:
+    name: "{{ item }}"
+    state: present
+  loop: "{{ bootstrap_users }}"
+
+- name: Ensure configured bootstrap users exist
+  ansible.builtin.user:
+    name: "{{ item }}"
+    shell: "{{ bootstrap_user_shell }}"
+    create_home: true
+    group: "{{ item }}"
+    groups: "{{ bootstrap_user_groups | join(',') }}"
+    append: true
+  loop: "{{ bootstrap_users }}"
+
+- name: Restrict bootstrap user home directories
+  ansible.builtin.file:
+    path: "/home/{{ item }}"
+    state: directory
+    owner: "{{ item }}"
+    group: "{{ item }}"
+    mode: "0700"
+  loop: "{{ bootstrap_users }}"
+
+- name: Ensure bootstrap user directories exist
+  ansible.builtin.file:
+    path: "/home/{{ item.0 }}/{{ item.1 }}"
+    state: directory
+    owner: "{{ item.0 }}"
+    group: "{{ item.0 }}"
+    mode: "0700"
+  loop: "{{ bootstrap_users | product(bootstrap_user_directories) | list }}"
+
+- name: Ensure user SSH directories exist
+  ansible.builtin.file:
+    path: "/home/{{ item }}/.ssh"
+    state: directory
+    owner: "{{ item }}"
+    group: "{{ item }}"
+    mode: "0700"
+  loop: "{{ bootstrap_users }}"
+
+- name: Reconcile authorized keys only when explicitly enabled
+  ansible.builtin.copy:
+    content: "{{ (bootstrap_authorized_keys[item] | join('\n')) + '\n' }}"
+    dest: "/home/{{ item }}/.ssh/authorized_keys"
+    owner: "{{ item }}"
+    group: "{{ item }}"
+    mode: "0600"
+  loop: "{{ bootstrap_users }}"
+  when:
+    - bootstrap_manage_authorized_keys | bool
+    - item in bootstrap_authorized_keys
+  no_log: true
+
+- name: Reconcile the managed shell environment block
+  ansible.builtin.blockinfile:
+    path: "/home/{{ item }}/.bashrc"
+    create: true
+    owner: "{{ item }}"
+    group: "{{ item }}"
+    mode: "0644"
+    marker: "# {mark} BOOTSTRAP MANAGED SHELL SETTINGS"
+    block: "{{ lookup('template', 'user-shell-block.j2') }}"
+  loop: "{{ bootstrap_users }}"
+  when: bootstrap_manage_user_dotfiles | bool
+
+- name: Reconcile tmux configuration
+  ansible.builtin.template:
+    src: user-tmux.conf.j2
+    dest: "/home/{{ item }}/.tmux.conf"
+    owner: "{{ item }}"
+    group: "{{ item }}"
+    mode: "0644"
+  loop: "{{ bootstrap_users }}"
+  when: bootstrap_manage_user_dotfiles | bool
+
+- name: Configure subuid and subgid ranges for rootless Docker
+  ansible.builtin.lineinfile:
+    path: "{{ item.0 }}"
+    regexp: "^{{ item.1 | regex_escape }}:"
+    line: "{{ item.1 }}:100000:65536"
+    create: true
+    owner: root
+    group: root
+    mode: "0644"
+  loop: "{{ ['/etc/subuid', '/etc/subgid'] | product(bootstrap_users) | list }}"
+  when: bootstrap_manage_rootless_docker | bool
+
+- name: Enable lingering for rootless Docker users
+  ansible.builtin.command:
+    cmd: "loginctl enable-linger {{ item }}"
+    creates: "/var/lib/systemd/linger/{{ item }}"
+  loop: "{{ bootstrap_users }}"
+  when: bootstrap_manage_rootless_docker | bool
+
+- name: Install rootless Docker user services when requested
+  ansible.builtin.command:
+    cmd: dockerd-rootless-setuptool.sh install
+    creates: "/home/{{ item }}/.config/systemd/user/docker.service"
+  become_user: "{{ item }}"
+  environment:
+    HOME: "/home/{{ item }}"
+    USER: "{{ item }}"
+  loop: "{{ bootstrap_users }}"
+  when: bootstrap_manage_rootless_docker | bool

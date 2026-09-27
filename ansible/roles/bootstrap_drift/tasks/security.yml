@@ -1,0 +1,152 @@
+---
+- name: Reconcile needrestart non-interactive policy
+  ansible.builtin.template:
+    src: needrestart.conf.j2
+    dest: /etc/needrestart/conf.d/no-prompt.conf
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Reconcile SSH hardening policy
+  ansible.builtin.template:
+    src: ssh-hardening.conf.j2
+    dest: "{{ bootstrap_ssh_config_path }}"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Validate and reload SSH
+
+- name: Reconcile sysctl hardening policy
+  ansible.builtin.template:
+    src: sysctl-hardening.conf.j2
+    dest: /etc/sysctl.d/99-hardening.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload sysctl settings
+
+- name: Set UFW default incoming policy
+  community.general.ufw:
+    direction: incoming
+    policy: deny
+  when: bootstrap_manage_firewall | bool
+
+- name: Set UFW default outgoing policy
+  community.general.ufw:
+    direction: outgoing
+    policy: allow
+  when: bootstrap_manage_firewall | bool
+
+- name: Reconcile UFW allow rules without deleting operator-managed rules
+  community.general.ufw:
+    rule: allow
+    direction: in
+    interface: "{{ item.interface | default(omit) }}"
+    from_ip: "{{ item.from_ip | default(omit) }}"
+    port: "{{ item.port | default(omit) }}"
+    proto: "{{ item.proto | default(omit) }}"
+    comment: "{{ item.comment | default(omit) }}"
+  loop: "{{ bootstrap_ufw_rules }}"
+  when: bootstrap_manage_firewall | bool
+
+- name: Ensure UFW is enabled after its allow rules are present
+  community.general.ufw:
+    state: enabled
+  when: bootstrap_manage_firewall | bool
+
+- name: Reconcile fail2ban policy
+  ansible.builtin.template:
+    src: jail.local.j2
+    dest: /etc/fail2ban/jail.local
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart fail2ban
+
+- name: Ensure fail2ban is enabled and running
+  ansible.builtin.service:
+    name: fail2ban
+    enabled: true
+    state: started
+
+- name: Reconcile auditd rules
+  ansible.builtin.template:
+    src: hardening.rules.j2
+    dest: /etc/audit/rules.d/hardening.rules
+    owner: root
+    group: root
+    mode: "0640"
+  notify: Reload audit rules
+
+- name: Ensure auditd is enabled and running
+  ansible.builtin.service:
+    name: auditd
+    enabled: true
+    state: started
+
+- name: Reconcile unattended-upgrades policy
+  ansible.builtin.template:
+    src: 50unattended-upgrades.j2
+    dest: /etc/apt/apt.conf.d/50unattended-upgrades
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Reconcile apt periodic update policy
+  ansible.builtin.template:
+    src: 20auto-upgrades.j2
+    dest: /etc/apt/apt.conf.d/20auto-upgrades
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Reconcile shared-memory mount policy
+  ansible.posix.mount:
+    path: /run/shm
+    src: tmpfs
+    fstype: tmpfs
+    opts: defaults,noexec,nosuid,nodev
+    dump: "0"
+    passno: "0"
+    state: present
+
+- name: Restrict cron directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+  loop:
+    - /etc/cron.d
+    - /etc/cron.daily
+    - /etc/cron.hourly
+    - /etc/cron.monthly
+    - /etc/cron.weekly
+
+- name: Restrict cron and at execution to root
+  ansible.builtin.copy:
+    content: "root\n"
+    dest: "{{ item }}"
+    owner: root
+    group: root
+    mode: "0600"
+  loop:
+    - /etc/cron.allow
+    - /etc/at.allow
+
+- name: Reconcile disabled filesystem modules
+  ansible.builtin.template:
+    src: disable-filesystems.conf.j2
+    dest: /etc/modprobe.d/disable-filesystems.conf
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Reconcile disabled network protocol modules
+  ansible.builtin.template:
+    src: disable-protocols.conf.j2
+    dest: /etc/modprobe.d/disable-protocols.conf
+    owner: root
+    group: root
+    mode: "0644"

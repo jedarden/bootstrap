@@ -1,0 +1,38 @@
+---
+- name: Reconcile packages and host prerequisites
+  ansible.builtin.include_tasks:
+    file: packages.yml
+    apply:
+      tags:
+        - packages
+  tags:
+    - packages
+
+- name: Reconcile users and workspaces
+  ansible.builtin.include_tasks:
+    file: users.yml
+    apply:
+      tags:
+        - users
+        - workspaces
+  tags:
+    - users
+    - workspaces
+
+- name: Reconcile security and system policy
+  ansible.builtin.include_tasks:
+    file: security.yml
+    apply:
+      tags:
+        - security
+  tags:
+    - security
+
+- name: Reconcile optional backup configuration
+  ansible.builtin.include_tasks:
+    file: backup.yml
+    apply:
+      tags:
+        - backup
+  tags:
+    - backup

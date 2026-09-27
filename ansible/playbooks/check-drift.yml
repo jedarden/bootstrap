@@ -1,0 +1,11 @@
+---
+- name: Preview post-bootstrap configuration drift
+  hosts: ex44
+  become: true
+  gather_facts: true
+  check_mode: true
+
+  roles:
+    - role: bootstrap_drift
+      tags:
+        - drift

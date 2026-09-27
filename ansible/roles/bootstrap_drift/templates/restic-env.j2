@@ -1,0 +1,5 @@
+{% for key, value in bootstrap_restic_env.items() | sort %}
+export {{ key }}={{ value | string | quote }}
+{% endfor %}
+export RESTIC_CACHE_DIR="/var/cache/restic"
+export RESTIC_PACK_SIZE="64"

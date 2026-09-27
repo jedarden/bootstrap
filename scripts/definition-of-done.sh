@@ -14,6 +14,7 @@ case "${1:-}" in
         "$ROOT/tests/start-sh-self-update-test.sh"
         "$ROOT/hosts/ex44/sync-start-sh.sh" --check
         "$ROOT/scripts/start-sh-release.sh" --check
+        "$ROOT/ansible/validate.sh"
         ;;
     '')
         "$ROOT/scripts/definition-of-done.sh" --fast

@@ -1,0 +1,13 @@
+# Managed by bootstrap/ansible.
+set -g prefix C-a
+unbind C-b
+bind C-a send-prefix
+set -g mouse on
+set -g base-index 1
+setw -g pane-base-index 1
+set -g default-terminal "screen-256color"
+set -sg escape-time 10
+set -g history-limit 10000
+bind | split-window -h -c "#{pane_current_path}"
+bind - split-window -v -c "#{pane_current_path}"
+bind r source-file ~/.tmux.conf \; display "Reloaded!"

@@ -1,0 +1,41 @@
+---
+- name: Require a Debian-family host
+  ansible.builtin.assert:
+    that:
+      - ansible_os_family == 'Debian'
+    fail_msg: >-
+      bootstrap_drift currently targets Debian/Ubuntu hosts, but this host is
+      {{ ansible_os_family }}.
+
+- name: Refresh apt metadata
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 3600
+  when: bootstrap_apt_update_cache | bool
+
+- name: Install bootstrap runtime packages
+  ansible.builtin.apt:
+    name: "{{ bootstrap_packages }}"
+    state: "{{ bootstrap_package_state }}"
+
+- name: Install explicitly requested optional packages
+  ansible.builtin.apt:
+    name: "{{ bootstrap_optional_packages }}"
+    state: "{{ bootstrap_package_state }}"
+  when: bootstrap_optional_packages | length > 0
+
+- name: Install Docker when the host opts into system Docker management
+  ansible.builtin.apt:
+    name: docker.io
+    state: "{{ bootstrap_package_state }}"
+  when: bootstrap_manage_system_docker | bool
+
+- name: Disable the system Docker daemon when rootless Docker is the policy
+  ansible.builtin.service:
+    name: "{{ item }}"
+    enabled: false
+    state: stopped
+  loop:
+    - docker.service
+    - docker.socket
+  when: bootstrap_manage_system_docker | bool

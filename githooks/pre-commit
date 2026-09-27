@@ -42,3 +42,10 @@ if ! "$tmp/sync-start-sh.sh" --check; then
     echo "files together. See docs/plan/plan.md ADR-1." >&2
     exit 1
 fi
+
+# Validate only the staged snapshot. This blocks plaintext or incorrectly
+# recipient-wrapped SOPS changes at commit time, while leaving unrelated
+# unstaged work alone.
+if [[ -x scripts/check-sops-contract.sh ]]; then
+    scripts/check-sops-contract.sh
+fi

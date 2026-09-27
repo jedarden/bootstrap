@@ -174,12 +174,18 @@ def scan(path: pathlib.Path) -> list[tuple[int, str]]:
     if parts and parts[0] == "secrets" and len(parts) >= 3:
         if ".sops." not in path.name:
             findings.append((1, "plaintext file under secrets/"))
-        elif "sops:" not in text or "ENC[" not in text:
+        elif (
+            ("sops:" not in text and not re.search(r"(?m)^sops_[A-Za-z0-9_]+[=:]", text))
+            or "ENC[" not in text
+        ):
             findings.append((1, "SOPS file is not encrypted"))
     elif (
         path.name != ".sops.yaml"
         and path.name.endswith((".sops.env", ".sops.yml", ".sops.yaml"))
-        and ("sops:" not in text or "ENC[" not in text)
+        and (
+            ("sops:" not in text and not re.search(r"(?m)^sops_[A-Za-z0-9_]+[=:]", text))
+            or "ENC[" not in text
+        )
     ):
         findings.append((1, "SOPS file is not encrypted"))
 

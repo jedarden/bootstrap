@@ -157,6 +157,7 @@ before staging it:
 
 ```bash
 sops filestatus secrets/bootstrap/ex44.sops.env
+scripts/check-sops-contract.sh
 git diff --check
 ```
 

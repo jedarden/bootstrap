@@ -5,6 +5,7 @@ ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 
 case "${1:-}" in
     --fast)
+        "$ROOT/scripts/check-hooks-path.sh" "$ROOT"
         bash -n "$ROOT/hosts/ex44/bootstrap.sh"
         bash -n "$ROOT/hosts/ex44/start.sh"
         bash -n "$ROOT/tests/integration/host-fixture.sh"
@@ -14,8 +15,11 @@ case "${1:-}" in
         bash -n "$ROOT/tests/sops-recovery-drill.sh"
         bash -n "$ROOT/tests/hetzner-robot-test.sh"
         bash -n "$ROOT/scripts/start-sh-release.sh"
+        bash -n "$ROOT/scripts/check-hooks-path.sh"
+        bash -n "$ROOT/tests/hook-activation-test.sh"
         "$ROOT/tests/start-sh-self-update-test.sh"
         "$ROOT/tests/start-sh-release-test.sh"
+        "$ROOT/tests/hook-activation-test.sh"
         "$ROOT/hosts/ex44/sync-start-sh.sh" --check
         "$ROOT/scripts/start-sh-release.sh" --check
         "$ROOT/tests/hetzner-robot-test.sh"

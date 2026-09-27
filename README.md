@@ -103,3 +103,11 @@ Git does not version hooks, so after a fresh clone activate it once:
 ```bash
 git config core.hooksPath githooks
 ```
+
+The definition-of-done check verifies this clone-local setting and fails
+loudly if it is missing or points somewhere else. Run it after activating the
+hooks:
+
+```bash
+scripts/definition-of-done.sh --fast
+```

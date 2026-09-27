@@ -47,6 +47,7 @@ assert_release() {
 mkdir -p "$FIXTURE/scripts" "$FIXTURE/hosts/ex44"
 cp -p \
     "$ROOT/scripts/check-host-parity.sh" \
+    "$ROOT/scripts/check-secret-leakage.sh" \
     "$ROOT/scripts/start-sh-release.sh" \
     "$FIXTURE/scripts/"
 cp -p \
@@ -114,6 +115,18 @@ echo 'Checking release archive generation and metadata...'
 (cd "$FIXTURE" && scripts/start-sh-release.sh release 1.3.2 >/dev/null)
 assert_release 1.3.2
 (cd "$FIXTURE" && scripts/start-sh-release.sh --check >/dev/null)
+
+echo 'Checking secret material fails closed before release generation...'
+cp -p "$FIXTURE/hosts/ex44/start.sh" "$TMP/start-good.sh"
+private_key_prefix='AGE-SECRET-'
+printf '\n# poisoned fixture: %sKEY-1fixtureonly\n' "$private_key_prefix" >> "$FIXTURE/hosts/ex44/start.sh"
+cp -p "$FIXTURE/hosts/ex44/start.sh" "$TMP/start-poisoned.sh"
+if (cd "$FIXTURE" && scripts/start-sh-release.sh release 1.3.4 >/dev/null 2>&1); then
+    fail 'release generation accepted secret material in start.sh'
+fi
+cmp -s "$TMP/start-poisoned.sh" "$FIXTURE/hosts/ex44/start.sh" ||
+    fail 'failed release generation changed poisoned start.sh'
+mv "$TMP/start-good.sh" "$FIXTURE/hosts/ex44/start.sh"
 
 echo 'Checking archive content drift is rejected...'
 cp -p "$FIXTURE/hosts/ex44/bootstrap-1.3.2.sh" "$TMP/archive-good.sh"

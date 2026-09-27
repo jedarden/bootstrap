@@ -114,9 +114,10 @@ decrypt_without_output() {
 
 assert_no_private_key_material() {
     local artifact
+    local private_key_marker='AGE-SECRET-''KEY-'
     for artifact in "$WORK"/*.err "$WORK"/*status.json; do
         [[ -f "$artifact" ]] || continue
-        ! grep -q 'AGE-SECRET-KEY-' "$artifact" ||
+        ! grep -q "$private_key_marker" "$artifact" ||
             die "private identity material appeared in diagnostics"
     done
 }

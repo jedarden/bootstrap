@@ -176,6 +176,7 @@ check_release() {
     esac
     bash -n "$START_SH"
     bash -n "$BOOTSTRAP_SH"
+    "$ROOT/scripts/check-secret-leakage.sh" --artifacts
     "$SYNC_SH" --check
     check_versions
     "$ROOT/scripts/check-host-parity.sh" "${parity_args[@]}"
@@ -321,6 +322,9 @@ create_bootstrap_archive() {
 prepare_release() {
     local next=$1 current
     require_version "$next"
+    # Audit before changing any release file so a poisoned source artifact
+    # fails closed without leaving a partially prepared release.
+    "$ROOT/scripts/check-secret-leakage.sh" --artifacts
     bash -n "$START_SH"
     current=$(extract_start_version "$START_SH")
     require_forward_version "$current" "$next"
@@ -348,6 +352,7 @@ prepare_rollback() {
     candidate_version=$(extract_start_version "$candidate")
     echo "Restoring $START_REL from $ref (payload version $candidate_version) as $next"
     bash -n "$candidate"
+    "$ROOT/scripts/check-secret-leakage.sh" --path "$candidate"
     write_start_version "$candidate" "$next"
     bash -n "$candidate"
     chmod --reference="$START_SH" "$candidate"

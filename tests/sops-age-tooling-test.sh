@@ -151,8 +151,9 @@ fi
 # Diagnostics and ciphertext may contain public metadata, but never a private
 # identity marker. Keep this assertion over every emitted artifact, excluding
 # the deliberately private identity files and decrypted fixture copies.
+private_key_marker='AGE-SECRET-''KEY-'
 for artifact in "$age_ciphertext" "$sops_ciphertext" "$WORK"/*.err "$WORK/sops-status.json"; do
-    if grep -q 'AGE-SECRET-KEY-' "$artifact"; then
+    if grep -q "$private_key_marker" "$artifact"; then
         die "private identity material appeared in emitted artifacts"
     fi
 done

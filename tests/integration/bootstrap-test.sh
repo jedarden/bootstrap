@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# Run the real EX44 bootstrap twice in one disposable Debian host. This is
-# deliberately an installation/idempotence test, not a second implementation
-# of bootstrap --verify; the latter is a read-only production check and is
-# intentionally not invoked here.
+# Run the real EX44 bootstrap in a disposable Debian host, cross a simulated
+# reboot boundary, and rerun it. This is deliberately an installation,
+# persistence, and idempotence test, not a second implementation of bootstrap
+# --verify; the latter is a read-only production check and is invoked separately
+# near the end of this test.
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 IMAGE=${BOOTSTRAP_TEST_IMAGE:-debian:12-slim}
@@ -110,11 +111,11 @@ run_bootstrap() {
     if [[ $# -gt 0 ]]; then
         docker_args+=(--env-file "$1")
     fi
-    docker_args+=("$CONTAINER" bash /test/bootstrap-under-test.sh)
+    docker_args+=("$CONTAINER" bash -c 'stty -echo; exec bash /test/bootstrap-under-test.sh')
     printf -v command_line '%q ' docker "${docker_args[@]}"
 
     echo "Running bootstrap ($label)..."
-    if ! script -qefc "$command_line" /dev/null \
+    if ! script -qefc "stty -echo; $command_line" /dev/null \
         < "$input" > "$output" 2>&1; then
         echo "bootstrap failed during $label; output follows:" >&2
         cat "$output" >&2
@@ -201,8 +202,8 @@ run_bootstrap_expect_failure() {
     local output="$TMP/$label-output"
 
     echo "Running bootstrap ($label), expecting failure..."
-    if script -qefc "$(printf '%q ' docker exec -it -e "$environment" \
-        "$CONTAINER" bash /test/bootstrap-under-test.sh)" /dev/null \
+    if script -qefc "stty -echo; $(printf '%q ' docker exec -it -e "$environment" \
+        "$CONTAINER" bash -c 'stty -echo; exec bash /test/bootstrap-under-test.sh')" /dev/null \
         < "$input" > "$output" 2>&1; then
         echo "ASSERTION FAILED: bootstrap unexpectedly succeeded during $label" >&2
         cat "$output" >&2
@@ -214,8 +215,8 @@ run_bootstrap_expect_failure() {
 partial_sops_output="$TMP/partial-sops-output"
 partial_sops_env="$TMP/partial-sops.env"
 write_private_env "$partial_sops_env" "BOOTSTRAP_B2_APPLICATION_KEY=$sops_b2_key"
-if script -qefc "$(printf '%q ' docker exec -it --env-file "$partial_sops_env" \
-    "$CONTAINER" bash /test/bootstrap-under-test.sh)" /dev/null \
+if script -qefc "stty -echo; $(printf '%q ' docker exec -it --env-file "$partial_sops_env" \
+    "$CONTAINER" bash -c 'stty -echo; exec bash /test/bootstrap-under-test.sh')" /dev/null \
     </dev/null > "$partial_sops_output" 2>&1; then
     echo 'ASSERTION FAILED: bootstrap accepted a partial SOPS secret pair' >&2
     exit 1
@@ -281,6 +282,49 @@ assert_user_output() {
     printf -v quoted_command '%q' "$command"
     assert_container "$description" \
         "su -s /bin/bash $quoted_user -c $quoted_command | grep -Fq -- $quoted_expected"
+}
+
+assert_recovered_host() {
+    local phase=$1
+
+    assert_container "$phase: SSH remains usable" \
+        'systemctl is-active --quiet sshd && sshd -t && sshd -T | grep -Fxq "passwordauthentication no"'
+    assert_container "$phase: UFW remains active with the SSH recovery rules" \
+        "ufw status verbose | grep -Fq 'Status: active' && \
+         ufw status verbose | grep -Fq 'Default: deny incoming' && \
+         ufw status verbose | grep -Fq 'tailscale0' && \
+         ufw status verbose | grep -Fq '213.133.99.0/24'"
+    assert_container "$phase: fail2ban remains enabled and queryable" \
+        'systemctl is-enabled --quiet fail2ban && systemctl is-active --quiet fail2ban && \
+         fail2ban-client status sshd | grep -Fq "Status for the jail: sshd"'
+    assert_container "$phase: auditd remains enabled and queryable" \
+        'systemctl is-enabled --quiet auditd && systemctl is-active --quiet auditd && \
+         auditctl -l | grep -Fq -- "-w /etc/passwd -p wa -k identity"'
+    assert_container "$phase: Tailscale reconnects with its persisted identity" \
+        'systemctl is-enabled --quiet tailscaled && systemctl is-active --quiet tailscaled && \
+         tailscale status | grep -Eq "^100\\.64\\." && \
+         tailscale status --json | grep -Fq "bootstrap-test.tailnet.ts.net."'
+    assert_container "$phase: backup scheduling remains executable" \
+        'grep -Fq "0 3 * * * root /usr/local/bin/backup-home" /etc/cron.d/restic-backup && \
+         grep -Fq "0 4 * * 0 root /usr/local/bin/backup-home --prune" /etc/cron.d/restic-backup && \
+         test -x /usr/local/bin/backup-home && /usr/local/bin/backup-home >/dev/null'
+    assert_container "$phase: user workspaces remain private and writable" \
+        'for user in coding trading; do \
+             [[ $(stat -c %U:%G:%a /home/$user) == $user:$user:700 ]] && \
+             [[ $(stat -c %U:%G /home/$user/workspace/security-acceptance.txt) == $user:$user ]] && \
+             su -s /bin/bash $user -c "printf %s $user >> /home/$user/workspace/security-acceptance.txt"; \
+         done'
+    for user in coding trading; do
+        assert_user_output "$phase: $user rootless Docker starts after reboot" \
+            "$user" 'Rootless Docker fixture' \
+            "/home/$user/bin/start-docker"
+        assert_user_output "$phase: $user workload uses its rootless Docker socket" \
+            "$user" 'Hello from Docker' \
+            'DOCKER_HOST=unix:///run/user/$(id -u)/docker.sock docker run --rm hello-world'
+        assert_user_output "$phase: $user launcher remains usable" \
+            "$user" 'claude 1.0.0' \
+            "HOME=/home/$user PATH=/home/$user/.local/bin:/usr/local/bin:/usr/bin:/bin HERDR_ENV=security-acceptance /home/$user/start.sh --no-update --agent claude"
+    done
 }
 
 run_bootstrap first "$first_input"
@@ -455,7 +499,11 @@ assert_container 'tailscaled is enabled and active' \
 assert_container 'Tailscale enrollment uses a private file reference' \
     "grep -Fq -- '--auth-key=file:' /var/lib/bootstrap-test/tailscale-up-args.log && \\
      ! grep -Fq -- 'tskey-' /var/lib/bootstrap-test/tailscale-up-args.log"
-if grep -Fq -- "$tailscale_auth_key" "$TMP/first-output"; then
+# `script` records bytes echoed by the disposable PTY before the bootstrap
+# prompt is active. Only inspect bootstrap output after its banner so that
+# terminal input echo cannot be mistaken for a secret disclosure.
+if sed -n '/=== Hetzner EX44 Bootstrap/,$p' "$TMP/first-output" | \
+    grep -Fq -- "$tailscale_auth_key"; then
     echo 'ASSERTION FAILED: Tailscale auth key appeared in bootstrap output' >&2
     exit 1
 fi
@@ -631,6 +679,14 @@ assert_container 'second run preserves both users ownership boundaries' \
      [[ $(stat -c %U:%G:%a /home/trading) == trading:trading:700 ]] && \
      [[ $(grep -Fc "coding:" /etc/subuid) -eq 1 ]] && \
      [[ $(grep -Fc "trading:" /etc/subuid) -eq 1 ]]'
+
+echo 'Simulating a reboot and checking persistent host services...'
+assert_container 'reboot boundary reconstructs boot-time runtime state' \
+    '/usr/local/bin/bootstrap-test-reboot && grep -Fxq "reboot boundary completed" /var/lib/bootstrap-test/reboot.log'
+assert_recovered_host 'after reboot'
+
+run_bootstrap_with_sops post-reboot-rerun "$sops_input"
+assert_recovered_host 'after post-reboot bootstrap rerun'
 
 openbao_token='fixture-openbao-token'
 openbao_b2_key='openbao-application-key'
@@ -852,7 +908,7 @@ grep -Fq 'ERROR: Tailscale authentication failed' "$failure_log" || {
     cat "$failure_log" >&2
     exit 1
 }
-if grep -Fq -- 'tskey-' "$failure_log"; then
+if sed -n '/=== Hetzner EX44 Bootstrap/,$p' "$failure_log" | grep -Fq -- 'tskey-auth-failure'; then
     echo 'ASSERTION FAILED: failed Tailscale enrollment exposed an auth key' >&2
     cat "$failure_log" >&2
     exit 1
@@ -868,7 +924,7 @@ grep -Fq 'ERROR: Could not enable or start the tailscaled service' "$service_fai
     cat "$service_failure_log" >&2
     exit 1
 }
-if grep -Fq -- 'tskey-' "$service_failure_log"; then
+if sed -n '/=== Hetzner EX44 Bootstrap/,$p' "$service_failure_log" | grep -Fq -- 'tskey-auth-failure'; then
     echo 'ASSERTION FAILED: Tailscale service failure exposed an auth key' >&2
     cat "$service_failure_log" >&2
     exit 1
@@ -883,7 +939,7 @@ grep -Fq 'ERROR: Tailscale installation failed' "$install_failure_log" || {
     cat "$install_failure_log" >&2
     exit 1
 }
-if grep -Fq -- 'tskey-' "$install_failure_log"; then
+if sed -n '/=== Hetzner EX44 Bootstrap/,$p' "$install_failure_log" | grep -Fq -- 'tskey-auth-failure'; then
     echo 'ASSERTION FAILED: Tailscale installation failure exposed an auth key' >&2
     cat "$install_failure_log" >&2
     exit 1

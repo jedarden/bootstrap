@@ -235,8 +235,12 @@ CLAUDE_INSTALL
                     [[ "${2:-}" == --quiet ]] || echo disabled
                     exit 1
                 fi
-                echo enabled
-                exit 0
+                if [[ -f "$state/$unit-enabled" ]]; then
+                    [[ "${2:-}" == "--quiet" ]] || echo enabled
+                    exit 0
+                fi
+                [[ "${2:-}" == "--quiet" ]] || echo disabled
+                exit 1
                 ;;
             is-active)
                 unit="${3:-${2:-}}"
@@ -244,16 +248,12 @@ CLAUDE_INSTALL
                     echo inactive
                     exit 0
                 fi
-                if [[ "$unit" == tailscaled ]]; then
-                    if [[ -f "$state/tailscaled-active" ]]; then
-                        [[ "${2:-}" == --quiet ]] || echo active
-                        exit 0
-                    fi
-                    [[ "${2:-}" == --quiet ]] || echo inactive
-                    exit 3
+                if [[ -f "$state/$unit-active" ]]; then
+                    [[ "${2:-}" == --quiet ]] || echo active
+                    exit 0
                 fi
-                echo active
-                exit 0
+                [[ "${2:-}" == --quiet ]] || echo inactive
+                exit 3
                 ;;
             enable)
                 unit="${3:-${2:-}}"
@@ -263,31 +263,38 @@ CLAUDE_INSTALL
                         exit 1
                     fi
                     touch "$state/tailscaled-enabled" "$state/tailscaled-active"
+                elif [[ -n "$unit" && "$unit" != --* ]]; then
+                    touch "$state/$unit-enabled"
+                fi
+                if [[ "${2:-}" == --now && -n "$unit" ]]; then
+                    touch "$state/$unit-active"
                 fi
                 exit 0
                 ;;
-            is-active)
-                unit="${3:-${2:-}}"
-                if [[ "$unit" == tailscaled && -f "$state/tailscaled-active" ]]; then
-                    exit 0
-                fi
-                if [[ "$unit" == tailscale && -f "$state/tailscale-connected" ]]; then
-                    exit 0
-                fi
-                exit 1
-                ;;
-            is-enabled)
-                unit="${3:-${2:-}}"
-                [[ "$unit" == tailscaled && -f "$state/tailscaled-enabled" ]]
-                ;;
             stop)
                 unit="${2:-}"
-                [[ "$unit" != tailscaled ]] || rm -f "$state/tailscaled-active"
+                rm -f "$state/$unit-active"
                 exit 0
                 ;;
             start)
                 unit="${2:-}"
-                [[ "$unit" != tailscaled ]] || touch "$state/tailscaled-active"
+                touch "$state/$unit-active"
+                exit 0
+                ;;
+            restart)
+                unit="${2:-}"
+                touch "$state/$unit-active"
+                exit 0
+                ;;
+            --user)
+                action="${2:-}"
+                unit="${3:-}"
+                if [[ "$action" == start && "$unit" == docker ]]; then
+                    runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+                    mkdir -p "$runtime_dir"
+                    touch "$runtime_dir/docker.sock"
+                    chown "$(id -u):$(id -g)" "$runtime_dir/docker.sock"
+                fi
                 exit 0
                 ;;
             list-unit-files)
@@ -335,6 +342,10 @@ CLAUDE_INSTALL
             --force)
                 if [[ "${2:-}" == reset ]]; then
                     : > "$rules"
+                    rm -f "$state/ufw-active"
+                elif [[ "${2:-}" == enable ]]; then
+                    printf '%s\n' 'ENABLED=yes' > /etc/ufw/ufw.conf
+                    touch "$state/ufw-enabled" "$state/ufw-active"
                 fi
                 ;;
             default)
@@ -344,7 +355,11 @@ CLAUDE_INSTALL
                 echo "ALLOW IN on ${3:-any} $*" >> "$rules"
                 ;;
             status)
-                echo 'Status: active'
+                if [[ -f "$state/ufw-active" ]]; then
+                    echo 'Status: active'
+                else
+                    echo 'Status: inactive'
+                fi
                 cat "$rules"
                 ;;
         esac
@@ -421,6 +436,11 @@ SSHD
             echo "rootless Docker fixture requires DOCKER_HOST=$expected_docker_host" >&2
             exit 1
         }
+        docker_socket=${DOCKER_HOST#unix://}
+        [[ -e "$docker_socket" ]] || {
+            echo "rootless Docker fixture socket is unavailable: $docker_socket" >&2
+            exit 1
+        }
         case "${1:-}" in
             info)
                 echo 'Rootless Docker fixture'
@@ -434,6 +454,9 @@ SSHD
             exit 1
         }
         mkdir -p "$HOME/.config/systemd/user"
+        mkdir -p "${XDG_RUNTIME_DIR:?}"
+        touch "$XDG_RUNTIME_DIR/docker.sock"
+        chown "$(id -u):$(id -g)" "$XDG_RUNTIME_DIR/docker.sock"
         cat > "$HOME/.config/systemd/user/docker.service" <<'DOCKER_SERVICE'
 [Unit]
 Description=Rootless Docker fixture
@@ -543,6 +566,50 @@ for command in apt-get curl timedatectl hostnamectl loginctl systemctl resolvect
     dockerd-rootless-setuptool.sh restic yq kubectl gh; do
     ln -sf "$SHIM_DIR/command-shim" "/usr/local/bin/$command"
 done
+
+cat > /usr/local/bin/bootstrap-test-reboot <<'REBOOT'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# The disposable image has no systemd PID 1, so an actual container restart
+# cannot exercise boot ordering. Model the important reboot boundary instead:
+# persistent configuration and enablement markers remain on disk, while
+# service/runtime state is discarded and reconstructed from those markers.
+state=/var/lib/bootstrap-test
+touch "$state/reboot-requested"
+rm -f \
+    "$state/sshd-active" \
+    "$state/fail2ban-active" \
+    "$state/auditd-active" \
+    "$state/tailscaled-active" \
+    "$state/ufw-active"
+rm -rf /run/user/*
+
+if [[ -f /etc/ufw/ufw.conf ]] && grep -Fxq 'ENABLED=yes' /etc/ufw/ufw.conf; then
+    touch "$state/ufw-active"
+fi
+
+[[ -f /etc/ssh/sshd_config.d/hardening.conf ]] && touch "$state/sshd-active"
+for unit in fail2ban auditd tailscaled; do
+    [[ -f "$state/$unit-enabled" ]] && touch "$state/$unit-active"
+done
+
+for user in coding trading; do
+    uid=$(id -u "$user")
+    runtime_dir=/run/user/$uid
+    if [[ -f /var/lib/systemd/linger/$user &&
+          -L /home/$user/.config/systemd/user/default.target.wants/docker.service ]]; then
+        mkdir -p "$runtime_dir"
+        chown "$user:$user" "$runtime_dir"
+        chmod 700 "$runtime_dir"
+        touch "$runtime_dir/docker.sock"
+        chown "$user:$user" "$runtime_dir/docker.sock"
+    fi
+done
+
+printf '%s\n' 'reboot boundary completed' > "$state/reboot.log"
+REBOOT
+chmod +x /usr/local/bin/bootstrap-test-reboot
 
 # The test copy is the production script without transformations: the
 # integration runner allocates a pty so the signed bootstrap digest remains

@@ -808,3 +808,45 @@ lives in docs/secrets/sops.md.
 - B2 application-key rotation and restic repository-key rotation are separate
   operations; changing the restic password alone is not a safe repository
   rotation.
+
+## ADR-12: 2026-09-27 — Cross-host bootstrap artifact parity is a rollout gate
+
+### Context
+
+`ex44.jedarden.com` and `lab.ardenone.com` currently consume the same
+canonical bootstrap and launcher artifacts. A release can nevertheless be
+prepared or reviewed from either an unstaged working tree or the Git index,
+and a second host directory would make it easy for one host's archive or
+version marker to lag behind the other. The existing release check verified
+the ex44 lineage internally but had no cross-host manifest or byte comparison.
+
+### Decision
+
+`scripts/check-host-parity.sh` is the pre-rollout parity gate. `--live` reads
+the current working tree and `--staged` reads the Git index, so an operator
+can check either the artifacts under review or exactly what is staged. The
+gate validates and, when both directories exist, byte-compares the complete
+artifact set for `hosts/ex44/` and `hosts/lab/`:
+
+- `bootstrap.sh`
+- `start.sh`
+- `start.sh.version`
+- every versioned `bootstrap-<version>.sh` archive
+
+While lab uses the canonical `hosts/ex44/` directory, the absence of
+`hosts/lab/` is the parity guarantee: there is only one copy. Creating
+`hosts/lab/` is the intentional host-directory split that permits host-
+specific divergence. The operator must pass `--allow-split` (or set
+`HOST_ARTIFACT_PARITY_ALLOW_SPLIT=true` for the release helper) to acknowledge
+that decision; the checker still validates each host's internal metadata,
+embedded launcher, current archive, and archive manifest.
+
+### Consequences
+
+- A release cannot pass its normal local check or distribution gate while a
+  present ex44/lab directory pair has drifted.
+- Staged checks cannot be fooled by unrelated unstaged edits, matching the
+  pre-commit hook's index-oriented behavior.
+- A future host split is explicit in both the directory layout and the
+  command-line acknowledgment, while each split lineage retains its own
+  bootstrap/version/archive integrity checks.

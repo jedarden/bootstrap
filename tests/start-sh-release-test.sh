@@ -45,7 +45,10 @@ assert_release() {
 }
 
 mkdir -p "$FIXTURE/scripts" "$FIXTURE/hosts/ex44"
-cp -p "$ROOT/scripts/start-sh-release.sh" "$FIXTURE/scripts/start-sh-release.sh"
+cp -p \
+    "$ROOT/scripts/check-host-parity.sh" \
+    "$ROOT/scripts/start-sh-release.sh" \
+    "$FIXTURE/scripts/"
 cp -p \
     "$ROOT/hosts/ex44/start.sh" \
     "$ROOT/hosts/ex44/bootstrap.sh" \
@@ -57,8 +60,8 @@ cp -p \
 git -C "$FIXTURE" init -q -b main
 git -C "$FIXTURE" config user.name release-test
 git -C "$FIXTURE" config user.email release-test@example.invalid
-git -C "$FIXTURE" add scripts/start-sh-release.sh hosts/ex44
-git -C "$FIXTURE" commit -q -m base
+git -C "$FIXTURE" add scripts/check-host-parity.sh scripts/start-sh-release.sh hosts/ex44
+git -C "$FIXTURE" commit -q --no-verify -m base
 git -C "$FIXTURE" show HEAD:hosts/ex44/start.sh > "$KNOWN_GOOD_START"
 
 git init --bare -q "$FORGEJO_BARE"
@@ -130,7 +133,7 @@ fi
 mv "$TMP/archive-good.sh" "$FIXTURE/hosts/ex44/bootstrap-1.3.2.sh"
 
 git -C "$FIXTURE" add hosts/ex44
-git -C "$FIXTURE" commit -q -m release
+git -C "$FIXTURE" commit -q --no-verify -m release
 
 echo 'Checking rollback archive generation...'
 (cd "$FIXTURE" && scripts/start-sh-release.sh rollback HEAD~1 1.3.3 >/dev/null)
@@ -144,7 +147,7 @@ cmp -s "$expected_rollback_start" "$FIXTURE/hosts/ex44/start.sh" ||
     fail 'rollback did not restore the known-good launcher payload from Git history'
 
 git -C "$FIXTURE" add hosts/ex44
-git -C "$FIXTURE" commit -q -m rollback
+git -C "$FIXTURE" commit -q --no-verify -m rollback
 
 echo 'Checking rollback through the publish and distribution gates...'
 (

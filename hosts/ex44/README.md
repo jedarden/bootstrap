@@ -466,6 +466,20 @@ edit `hosts/ex44/start.sh`, then run:
 ./scripts/start-sh-release.sh --check
 ```
 
+Before rollout, run the cross-host artifact check against both the current
+working tree and the staged index:
+
+```bash
+./scripts/check-host-parity.sh --live
+./scripts/check-host-parity.sh --staged
+```
+
+It compares the bootstrap, standalone launcher, version marker, and every
+versioned bootstrap archive for ex44 and lab. Parity is required while both
+hosts use the canonical `hosts/ex44/` directory. Divergence is allowed only
+after an intentional `hosts/lab/` split, using `--allow-split` (and
+`HOST_ARTIFACT_PARITY_ALLOW_SPLIT=true` with the release helper).
+
 The helper updates the `bootstrap.sh` metadata and `START_SH_VERSION`, writes
 the matching `start.sh.version`, regenerates the embedded copy, and creates
 the exact `bootstrap-<version>.sh` archive. The check rejects any disagreement

@@ -1020,8 +1020,10 @@ set -g default-terminal "screen-256color"
 # Faster escape
 set -sg escape-time 10
 
-# History
-set -g history-limit 10000
+# History (kept modest deliberately - see the OOM-protection note below;
+# large scrollback across many sessions was a contributing factor in the
+# 2026-05-25 tmux-server OOM incident)
+set -g history-limit 2000
 
 # Split panes with | and -
 bind | split-window -h -c "#{pane_current_path}"

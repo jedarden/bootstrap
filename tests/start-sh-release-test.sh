@@ -8,6 +8,10 @@ set -Eeuo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/start-sh-release-test.XXXXXX")
 FIXTURE="$TMP/repository"
+FORGEJO_BARE="$TMP/forgejo.git"
+GITHUB_BARE="$TMP/github.git"
+GITHUB_RAW="$TMP/github-raw"
+KNOWN_GOOD_START="$TMP/known-good-start.sh"
 trap 'rm -rf "$TMP"' EXIT
 
 fail() {
@@ -53,6 +57,34 @@ git -C "$FIXTURE" config user.name release-test
 git -C "$FIXTURE" config user.email release-test@example.invalid
 git -C "$FIXTURE" add scripts/start-sh-release.sh hosts/ex44
 git -C "$FIXTURE" commit -q -m base
+git -C "$FIXTURE" show HEAD:hosts/ex44/start.sh > "$KNOWN_GOOD_START"
+
+git init --bare -q "$FORGEJO_BARE"
+git init --bare -q "$GITHUB_BARE"
+mkdir -p "$GITHUB_RAW"
+git -C "$FIXTURE" remote add origin "$FORGEJO_BARE"
+git --git-dir="$FORGEJO_BARE" config core.hooksPath "$FORGEJO_BARE/hooks"
+
+# Model the server-side mirror and its raw artifact tree locally. The release
+# helper still uses its real git push and distribution checks; this hook only
+# keeps the test self-contained and non-destructive.
+printf '%s\n' \
+    '#!/usr/bin/env bash' \
+    'set -euo pipefail' \
+    "GITHUB_BARE=$(printf '%q' "$GITHUB_BARE")" \
+    "GITHUB_RAW=$(printf '%q' "$GITHUB_RAW")" \
+    "FIXTURE=$(printf '%q' "$FIXTURE")" \
+    'unset GIT_DIR GIT_WORK_TREE' \
+    'while read -r oldrev newrev ref; do' \
+    '    [[ "$ref" == refs/heads/main ]] || continue' \
+    '    git -C "$FIXTURE" push -q "$GITHUB_BARE" "$newrev:refs/heads/main"' \
+    '    version=$(git --git-dir="$GITHUB_BARE" show "$newrev:hosts/ex44/start.sh.version")' \
+    '    for filename in bootstrap.sh start.sh start.sh.version "bootstrap-$version.sh"; do' \
+    '        git --git-dir="$GITHUB_BARE" show "$newrev:hosts/ex44/$filename" > "$GITHUB_RAW/$filename"' \
+    '    done' \
+    'done' > "$FORGEJO_BARE/hooks/post-receive"
+chmod +x "$FORGEJO_BARE/hooks/post-receive"
+git -C "$FIXTURE" push -q origin HEAD:main
 
 echo 'Checking release archive generation and metadata...'
 (cd "$FIXTURE" && scripts/start-sh-release.sh release 1.3.2 >/dev/null)
@@ -84,4 +116,41 @@ echo 'Checking rollback archive generation...'
 assert_release 1.3.3
 (cd "$FIXTURE" && scripts/start-sh-release.sh --check >/dev/null)
 
-echo 'start.sh release archive tests passed.'
+expected_rollback_start="$TMP/expected-rollback-start.sh"
+sed -E 's/^START_SH_VERSION="[0-9]+\.[0-9]+\.[0-9]+"$/START_SH_VERSION="1.3.3"/' \
+    "$KNOWN_GOOD_START" > "$expected_rollback_start"
+cmp -s "$expected_rollback_start" "$FIXTURE/hosts/ex44/start.sh" ||
+    fail 'rollback did not restore the known-good launcher payload from Git history'
+
+git -C "$FIXTURE" add hosts/ex44
+git -C "$FIXTURE" commit -q -m rollback
+
+echo 'Checking rollback through the publish and distribution gates...'
+(
+    cd "$FIXTURE"
+    FORGEJO_REMOTE=origin \
+    GITHUB_REPO_URL="$GITHUB_BARE" \
+    GITHUB_RAW_ROOT="file://$GITHUB_RAW" \
+    DISTRIBUTION_TIMEOUT_SECONDS=5 \
+    DISTRIBUTION_POLL_SECONDS=0 \
+    scripts/start-sh-release.sh publish >/dev/null
+)
+(
+    cd "$FIXTURE"
+    FORGEJO_REMOTE=origin \
+    GITHUB_REPO_URL="$GITHUB_BARE" \
+    GITHUB_RAW_ROOT="file://$GITHUB_RAW" \
+    DISTRIBUTION_TIMEOUT_SECONDS=5 \
+    DISTRIBUTION_POLL_SECONDS=0 \
+    scripts/start-sh-release.sh distribution-check >/dev/null
+)
+[[ -z "$(git -C "$FIXTURE" rev-list origin/main..HEAD)" ]] ||
+    fail 'publish gate left the fixture origin behind HEAD'
+[[ "$(git --git-dir="$GITHUB_BARE" rev-parse refs/heads/main)" == "$(git -C "$FIXTURE" rev-parse HEAD)" ]] ||
+    fail 'distribution gate did not mirror the rollback commit'
+for filename in bootstrap.sh start.sh start.sh.version bootstrap-1.3.3.sh; do
+    cmp -s "$FIXTURE/hosts/ex44/$filename" "$GITHUB_RAW/$filename" ||
+        fail "distributed $filename does not match the committed rollback release"
+done
+
+echo 'start.sh release and rollback tests passed.'

@@ -111,3 +111,16 @@ It validates every playbook without contacting a host. A live idempotence
 check needs a disposable or explicitly selected host; it is not run by the
 repository gate because applying these tasks changes firewall, SSH, and
 service state.
+
+The acceptance test exercises both drift playbooks against a disposable
+privileged Debian container. It covers initial convergence, idempotent
+reapplication, representative file drift, check mode, and invalid backup or
+Docker-policy variables without changing the controller or host:
+
+```bash
+../tests/ansible-drift-acceptance-test.sh
+```
+
+The test requires Docker and the `community.docker` Ansible collection. Set
+`BOOTSTRAP_DRIFT_TEST_REQUIRE_DOCKER=true` when an unavailable Docker daemon
+should fail rather than skip the test.

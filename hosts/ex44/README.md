@@ -484,28 +484,30 @@ the self-update comparison accepts it:
 ./scripts/start-sh-release.sh publish
 ```
 
-**start.sh launches claude or codex, as the `start` command.** Selection order
-is the positional agent (`start codex`) or `--agent claude|codex` >
-`$START_SH_AGENT` > interactive prompt > `claude`. The prompt only appears when
-stdin is a TTY, so non-interactive invocations take the `claude` default
-instead of blocking. Giving a positional agent and a different `--agent` is an
-error.
+### Coding-agent launcher
 
-`~/.local/bin/start` is a **symlink** to `~/start.sh`, not a second copy:
-`bootstrap.sh` creates it, and hosts bootstrapped earlier get it on the first
-run after self-update lands v1.3.0. `~/start.sh` stays the deployed file so
-self-update, the sync script and already-deployed hosts are unaffected; the
-script resolves its real path (`readlink -f`) so it behaves the same through
-the link. It only auto-links from `~/start.sh` itself and never replaces an
-existing `start`. See `../../docs/plan/plan.md` ADR-7.
+Bootstrap installs the `start` command on each configured user's `PATH` as
+`~/.local/bin/start`, a symlink to the single deployed and self-updating copy
+at `~/start.sh`. Check the installation with:
 
-When start.sh detects that something is **already multiplexing** — a herdr
-pane (`HERDR_ENV`) or an existing tmux client (`$TMUX`) — it skips tmux
-entirely and execs the agent in the current pane rather than nesting. herdr is
-checked first, since herdr rides on the same ambient tmux server and a herdr
-pane has both variables set. On a bare shell the original behavior is
-unchanged: a new phonetic-alphabet tmux session, then attach. See
-`../../docs/plan/plan.md` ADR-2 and ADR-3.
+```bash
+command -v start
+readlink ~/.local/bin/start
+```
+
+The command accepts either positional agent argument. `start claude` launches
+Claude Code with `--dangerously-skip-permissions --model sonnet`; `start codex`
+launches Codex with `--dangerously-bypass-approvals-and-sandbox`. The equivalent
+flag form is `start --agent claude|codex`. Selection order is the explicit
+positional or `--agent` value, `$START_SH_AGENT`, an interactive prompt, then
+`claude`; when stdin is not a TTY, the prompt is skipped and `claude` is the
+default. A positional agent that conflicts with `--agent` is rejected.
+
+On a bare shell, `start` creates the first available phonetic-alphabet tmux
+session, sends the selected agent command into it, and attaches. When it
+detects an existing multiplexer — a herdr pane (`HERDR_ENV`) or tmux client
+(`$TMUX`) — it skips tmux and `exec`s the selected agent in the current pane so
+sessions are not nested. See `../../docs/plan/plan.md` ADR-2, ADR-3, and ADR-7.
 
 ```bash
 start                         # prompt (or claude if no TTY)

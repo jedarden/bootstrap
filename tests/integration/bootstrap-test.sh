@@ -202,12 +202,40 @@ assert_container 'launcher reports its version without starting an agent' \
 assert_count 'workspace setup is not duplicated' 1 '# === Security: Isolated temp directory ===' /home/coding/.bashrc
 assert_count 'rootless Docker setup is not duplicated' 1 '# === Rootless Docker ===' /home/coding/.bashrc
 
-# Exercise the generated backup entry point too. The restic double records a
-# local repository marker, so this validates the command path without using a
-# real B2 account or leaking credentials.
+# Exercise the generated backup and restore entry points too. The restic
+# double persists representative /home and Tailscale data locally, so this
+# validates a usable round-trip without using a real B2 account or leaking
+# credentials.
+assert_container 'restore drill fixture is owned by coding' \
+    'mkdir -p /home/coding/workspace/restore-drill && printf "restic restore drill\n" > /home/coding/workspace/restore-drill/marker.txt && chown -R coding:coding /home/coding/workspace/restore-drill'
 assert_container 'backup-home completes' '/usr/local/bin/backup-home >/dev/null'
 assert_container 'list-backups sees the repository' \
     "/usr/local/bin/list-backups | grep -Fq abcdef0123456789"
+assert_container 'restore drill source is usable before restore' \
+    "su -s /bin/bash coding -c 'cat /home/coding/workspace/restore-drill/marker.txt' | grep -Fxq 'restic restore drill'"
+assert_container 'restore drill source is changed before restore' \
+    "printf 'tampered data\\n' > /home/coding/workspace/restore-drill/marker.txt"
+
+restore_input="$TMP/restore-input"
+printf 'y\n' > "$restore_input"
+restore_output="$TMP/restore-output"
+if ! docker exec -i "$CONTAINER" /usr/local/bin/restore-home latest \
+    < "$restore_input" > "$restore_output" 2>&1; then
+    echo 'restore-home failed during the restore drill; output follows:' >&2
+    cat "$restore_output" >&2
+    exit 1
+fi
+grep -Fq 'Restore complete from snapshot: latest' "$restore_output" || {
+    echo 'restore-home did not report completion; output follows:' >&2
+    cat "$restore_output" >&2
+    exit 1
+}
+assert_container 'restore drill recovers the original file' \
+    "grep -Fxq 'restic restore drill' /home/coding/workspace/restore-drill/marker.txt"
+assert_container 'restored data is usable by the configured user' \
+    "su -s /bin/bash coding -c 'cat /home/coding/workspace/restore-drill/marker.txt' | grep -Fxq 'restic restore drill'"
+assert_container 'restore drill preserves user ownership' \
+    '[[ $(stat -c %U:%G /home/coding/workspace/restore-drill/marker.txt) == coding:coding ]]'
 
 first_snapshot=$(docker exec "$CONTAINER" /usr/local/bin/bootstrap-test-snapshot)
 

@@ -164,6 +164,49 @@ backup section is reported as `SKIPPED` rather than failed. Run as root with
 `sudo`; an unprivileged verification prints warnings and privileged checks
 will fail.
 
+### Backup and restore drill
+
+Run this after bootstrap and periodically after changing the B2 or restic
+configuration. It verifies that the credentials can reach the configured
+repository, a new snapshot is written, and a representative file can be
+restored and read. The commands below use a temporary restore target, so they
+do not overwrite the live `/home` tree:
+
+```bash
+# Use the configured backup entry point and confirm that a snapshot exists.
+sudo /usr/local/bin/backup-home
+sudo /usr/local/bin/list-backups
+
+# Create a marker in a backed-up path, then write it to B2.
+sudo install -d -o coding -g coding /home/coding/workspace/restic-restore-drill
+printf 'restic restore drill %s\n' "$(date -u +%FT%TZ)" |
+  sudo tee /home/coding/workspace/restic-restore-drill/marker.txt >/dev/null
+sudo chown coding:coding /home/coding/workspace/restic-restore-drill/marker.txt
+sudo /usr/local/bin/backup-home
+
+# Restore the latest snapshot into a disposable directory and verify the marker.
+DRILL_DIR=$(mktemp -d /var/tmp/restic-restore-drill.XXXXXX)
+sudo bash -c 'set -euo pipefail; source /etc/restic/b2.env; restic restore latest --target "$1" --include /home/coding/workspace/restic-restore-drill' _ "$DRILL_DIR"
+sudo grep -Fq 'restic restore drill ' \
+  "$DRILL_DIR/home/coding/workspace/restic-restore-drill/marker.txt"
+sudo rm -rf "$DRILL_DIR"
+```
+
+The automated integration test performs the same round trip through
+`restore-home latest`, changes the marker before restoring, and checks that
+the restored file is readable by `coding`. A live `restore-home` invocation
+restores into `/` and overwrites `/home` and `/var/lib/tailscale`; use it only
+for an intentional recovery or maintenance window:
+
+```bash
+sudo /usr/local/bin/restore-home latest
+```
+
+Confirm the prompt only after checking the selected snapshot and ensuring the
+host is ready for those paths to be replaced. The restic encryption password
+and B2 application key remain in `/etc/restic/b2.env`; never put either value
+in shell history, logs, or this procedure.
+
 ## Security Features
 
 ### Network

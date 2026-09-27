@@ -12,7 +12,7 @@ ROOT=/var/lib/bootstrap-test
 KEYS="$ROOT/keys"
 SHIM_DIR=/usr/local/lib/bootstrap-test
 
-mkdir -p "$ROOT" "$KEYS" "$SHIM_DIR" /test
+mkdir -p "$ROOT" "$KEYS" "$SHIM_DIR" /test /var/lib/tailscale
 cp "$(dirname "$BOOTSTRAP_SOURCE")/keys/jedarden.pub" "$KEYS/jedarden.pub"
 cp "$(dirname "$BOOTSTRAP_SOURCE")/keys/jeda-mbp.pub" "$KEYS/jeda-mbp.pub"
 
@@ -244,6 +244,7 @@ DOCKER_SERVICE
         ;;
     restic)
         repository="$state/restic-repository-created"
+        snapshot="$state/restic-snapshot"
         case "${1:-}" in
             snapshots)
                 if [[ -f "$repository" ]]; then
@@ -252,13 +253,70 @@ DOCKER_SERVICE
                 fi
                 exit 1
                 ;;
-            init|backup)
+            init)
                 touch "$repository"
-                if [[ "${1:-}" == backup ]]; then
-                    echo 'backup complete'
-                fi
                 ;;
-            check|restore)
+            backup)
+                # Keep a small local representation of the two production
+                # backup roots. This is enough to exercise a real restore
+                # round-trip without contacting B2 or exposing credentials.
+                rm -rf "$snapshot"
+                mkdir -p "$snapshot"
+                cp -a /home "$snapshot/home"
+                cp -a /var/lib/tailscale "$snapshot/tailscale"
+                touch "$repository"
+                echo 'backup complete'
+                ;;
+            check)
+                ;;
+            restore)
+                target=/
+                includes=()
+                shift
+                while [[ $# -gt 0 ]]; do
+                    case "$1" in
+                        --target)
+                            target=$2
+                            shift 2
+                            ;;
+                        --include)
+                            includes+=("$2")
+                            shift 2
+                            ;;
+                        *)
+                            shift
+                            ;;
+                    esac
+                done
+
+                [[ -d "$snapshot/home" && -d "$snapshot/tailscale" ]] || {
+                    echo 'restic fixture has no snapshot data' >&2
+                    exit 1
+                }
+
+                restore_root() {
+                    local source=$1 destination=$2
+                    mkdir -p "$destination"
+                    cp -a "$source/." "$destination/"
+                }
+
+                if [[ ${#includes[@]} -eq 0 ]]; then
+                    restore_root "$snapshot/home" "$target/home"
+                    restore_root "$snapshot/tailscale" "$target/var/lib/tailscale"
+                else
+                    for include in "${includes[@]}"; do
+                        case "$include" in
+                            /home) restore_root "$snapshot/home" "$target/home" ;;
+                            /var/lib/tailscale)
+                                restore_root "$snapshot/tailscale" "$target/var/lib/tailscale"
+                                ;;
+                            *)
+                                echo "unexpected restic fixture include: $include" >&2
+                                exit 1
+                                ;;
+                        esac
+                    done
+                fi
                 ;;
             *)
                 echo "unexpected restic operation in bootstrap fixture: ${1:-}" >&2

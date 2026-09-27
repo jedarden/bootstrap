@@ -219,6 +219,131 @@ backup section is reported as `SKIPPED` rather than failed. Run as root with
 `sudo`; an unprivileged verification prints warnings and privileged checks
 will fail.
 
+### Verification Commands
+
+This is the manual source of truth for checking a host after bootstrap. Run
+the commands after reboot, from a Tailscale session, and use `sudo` unless a
+command is explicitly run as a configured user. The automated `--verify` mode
+above covers the machine-readable hardening, Tailscale, Docker, and restic
+checks; workspace isolation and the interactive capacity checks remain
+manual. Use the backup and restore drill below for an end-to-end
+data-recovery test.
+
+#### Hardening and services
+
+```bash
+# Firewall: expect active, deny incoming, allow outgoing, Tailscale, and rescue rules.
+sudo ufw status verbose
+
+# SSH hardening: inspect the effective configuration, not just the source file.
+sudo sshd -T | grep -E 'permitrootlogin|passwordauthentication|pubkeyauthentication|authenticationmethods|maxauthtries|allowusers|x11forwarding|allowtcpforwarding|allowagentforwarding|permittunnel|gatewayports|permituserenvironment'
+
+# Brute-force protection and audit rules.
+sudo fail2ban-client status sshd
+sudo auditctl -l
+
+# Kernel hardening: expect the configured non-default protection values.
+sudo sysctl -a | grep -E 'rp_filter|syncookies|accept_redirects|send_redirects|log_martians|randomize_va_space|kptr_restrict|dmesg_restrict|suid_dumpable|protected_hardlinks|protected_symlinks'
+```
+
+#### Tailscale
+
+```bash
+sudo systemctl is-enabled --quiet tailscaled && sudo systemctl is-active --quiet tailscaled
+tailscale status
+tailscale ip -4
+```
+
+`tailscale status` should show this host with a `100.64.0.0/10` address (or
+the Tailscale IPv6 range), and SSH should be performed through its tailnet
+name or address rather than the public interface.
+
+#### Workspace isolation
+
+The bootstrap stores the configured users in `/etc/bootstrap/config`. Check
+every listed user rather than assuming the defaults are still in use:
+
+```bash
+read -r -a users <<< "$(sudo sed -n 's/^USERS=\"\([^\"]*\)\".*$/\1/p' /etc/bootstrap/config)"
+for user in "${users[@]}"; do
+  sudo stat -c '%a %U:%G %n' \
+    "/home/$user" "/home/$user/.ssh/authorized_keys" \
+    "/home/$user/.tmp" "/home/$user/.cache" "/home/$user/workspace"
+  sudo -iu "$user" test -w "/home/$user/workspace"
+done
+
+# Each unprivileged user must be unable to read another user's home.
+for user in "${users[@]}"; do
+  for other in "${users[@]}"; do
+    if [[ "$user" != "$other" ]]; then
+      sudo -iu "$user" test ! -r "/home/$other" || exit 1
+    fi
+  done
+  ! sudo find "/home/$user" -xdev ! -user "$user" -print -quit | grep -q . || exit 1
+done
+```
+
+Expect private user homes (`700`), private authorized keys (`600`),
+user-owned workspace trees, and no root-owned files inside a user's home.
+
+#### Rootless Docker
+
+The system Docker daemon must remain disabled. Test the workload through each
+configured user's socket so a rootful `/run/docker.sock` cannot make this
+check pass accidentally:
+
+```bash
+sudo systemctl is-enabled docker.service docker.socket
+sudo systemctl is-active docker.service docker.socket
+
+read -r -a users <<< "$(sudo sed -n 's/^USERS=\"\([^\"]*\)\".*$/\1/p' /etc/bootstrap/config)"
+for user in "${users[@]}"; do
+  uid=$(id -u "$user")
+  sudo -iu "$user" "/home/$user/bin/start-docker"
+  sudo -iu "$user" env \
+    XDG_RUNTIME_DIR="/run/user/$uid" \
+    DOCKER_HOST="unix:///run/user/$uid/docker.sock" \
+    docker info --format 'Docker root: {{.DockerRootDir}}'
+  sudo -iu "$user" env \
+    XDG_RUNTIME_DIR="/run/user/$uid" \
+    DOCKER_HOST="unix:///run/user/$uid/docker.sock" \
+    docker run --rm hello-world
+done
+```
+
+The system service checks should report `disabled`/`masked` and
+`inactive`/`failed`/`unknown`; each Docker root should be under that user's
+home, and `hello-world` must run without root privileges.
+
+#### Restic and Backblaze B2
+
+If backup was configured, verify the credential file permissions and repository
+access without printing its contents. If B2 was intentionally skipped during
+bootstrap, the absence of `/etc/restic/b2.env` is expected and the automated
+check reports `SKIPPED`:
+
+```bash
+if sudo test -r /etc/restic/b2.env; then
+  sudo stat -c '%a %n' /etc/restic/b2.env
+  sudo /usr/local/bin/list-backups
+  sudo /usr/local/bin/backup-home
+else
+  echo 'Restic/B2 is not configured; verify that this was intentional.'
+fi
+```
+
+Expect mode `600` for `/etc/restic/b2.env`, at least one accessible snapshot,
+and a successful backup plus integrity check. Use the backup and restore drill
+below to prove that a representative file can be restored without overwriting
+the live `/home` tree.
+
+#### Capacity and system overview
+
+```bash
+ncdu /
+htop
+```
+
 ### Backup and restore drill
 
 Run this after bootstrap and periodically after changing the B2 or restic

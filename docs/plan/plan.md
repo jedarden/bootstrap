@@ -683,3 +683,48 @@ rules owned by an operator or another system.
 - New host types must either provide compatible Debian-family variables or
   add a separate role; this role does not silently broaden itself to another
   distribution.
+
+## ADR-10: 2026-09-27 — Robot provisioning is a stateful Kubernetes Deployment
+
+### Context
+
+The repository's future-plan entry for Kubernetes automation named the Hetzner
+Robot API but did not define an ownership boundary, authentication contract, or
+recovery behavior. Robot's Linux-install endpoint activates an installer, while
+the server still needs a reset before that installer can run. A one-shot
+request without durable state could therefore activate an installation and
+then repeat or abandon the reset after a pod restart.
+
+### Decision
+
+Add `automation/hetzner_robot/robot.py`, a standard-library-only reconciler,
+and the `k8s/hetzner-robot/` Kustomize base. The reconciler authenticates with
+Robot web-service credentials supplied through environment variables, addresses
+servers by number, reads the current server and Linux-install state, and only
+activates Linux when the declared distribution, language, and optional SSH key
+fingerprints do not already match. Matching state is a no-op.
+
+An active mismatch is treated as drift and is refused unless the declaration
+explicitly opts into `reinstall_on_drift`; this makes the destructive action
+visible in Git. Successful activation is recorded in a mode-0600 state file
+before the reset. If the reset fails, the next reconciliation retries only the
+reset. Transport and rate-limit/server errors use bounded retries, while
+authentication and other client errors fail immediately without printing Robot
+response bodies, which can contain generated passwords.
+
+The Kubernetes workload is a single-replica, non-root Deployment with an
+internal hourly loop. It mounts the code and JSON desired state from ConfigMaps,
+uses an externally managed Secret for credentials, and stores pending-operation
+state on a `sata` PVC. This shape is compatible with the repository's ArgoCD
+ownership policy; environment-specific overlays provide real server numbers
+and secret material.
+
+### Consequences
+
+- The automation provisions the Robot Linux installer and reset only; the
+  existing host bootstrap script remains the post-install configuration path.
+- A PVC is part of the deployment contract because recovery state must survive
+  a pod restart.
+- API-level tests use a local HTTP server and validate authentication, form
+  encoding, idempotence, retry classification, safe drift refusal, and reset
+  recovery without contacting Hetzner.

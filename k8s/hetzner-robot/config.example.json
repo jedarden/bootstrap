@@ -1,0 +1,5 @@
+{
+  "reset_after_change": true,
+  "reinstall_on_drift": false,
+  "servers": []
+}

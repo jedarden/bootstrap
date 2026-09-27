@@ -1,0 +1,82 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hetzner-robot-provisioner
+  labels:
+    app.kubernetes.io/name: hetzner-robot-provisioner
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: hetzner-robot-provisioner
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: hetzner-robot-provisioner
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: provisioner
+          image: python:3.13.7-slim-bookworm
+          imagePullPolicy: IfNotPresent
+          command: ["python3", "/opt/hetzner-robot/robot.py"]
+          args:
+            - reconcile
+            - --config
+            - /etc/hetzner-robot/config.json
+            - --state-file
+            - /var/lib/hetzner-robot/state.json
+            - --interval
+            - "3600"
+          env:
+            - name: HETZNER_ROBOT_URL
+              value: https://robot-ws.your-server.de
+            - name: HETZNER_ROBOT_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: hetzner-robot-credentials
+                  key: username
+            - name: HETZNER_ROBOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: hetzner-robot-credentials
+                  key: password
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - name: program
+              mountPath: /opt/hetzner-robot
+              readOnly: true
+            - name: config
+              mountPath: /etc/hetzner-robot
+              readOnly: true
+            - name: state
+              mountPath: /var/lib/hetzner-robot
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: program
+          configMap:
+            name: hetzner-robot-program
+            defaultMode: 0555
+        - name: config
+          configMap:
+            name: hetzner-robot-config
+            defaultMode: 0444
+        - name: state
+          persistentVolumeClaim:
+            claimName: hetzner-robot-state
+        - name: tmp
+          emptyDir: {}

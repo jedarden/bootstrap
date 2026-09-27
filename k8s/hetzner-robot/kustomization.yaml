@@ -1,0 +1,17 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - deployment.yaml
+  - pvc.yaml
+
+configMapGenerator:
+  - name: hetzner-robot-program
+    files:
+      - robot.py=robot.py
+  - name: hetzner-robot-config
+    files:
+      - config.json=config.example.json
+
+generatorOptions:
+  disableNameSuffixHash: true

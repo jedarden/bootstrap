@@ -30,7 +30,7 @@ alongside the current script in the host directory that shipped them. See
 ## Future Plans
 
 - [Ansible playbooks for drift management](./ansible/README.md)
-- K8s-based automation via Hetzner Robot API
+- [Kubernetes-based Hetzner Robot provisioning](./automation/hetzner_robot/README.md)
 - SOPS-encrypted secrets
 
 ## Development

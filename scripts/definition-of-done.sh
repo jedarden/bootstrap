@@ -23,6 +23,8 @@ case "${1:-}" in
         bash -n "$ROOT/tests/secrets-gitignore-test.sh"
         bash -n "$ROOT/tests/ansible-sops-workflow-test.sh"
         bash -n "$ROOT/tests/sops-recovery-drill.sh"
+        bash -n "$ROOT/scripts/bootstrap-preflight.sh"
+        bash -n "$ROOT/tests/bootstrap-platform-acceptance-test.sh"
         bash -n "$ROOT/tests/hetzner-robot-test.sh"
         bash -n "$ROOT/scripts/start-sh-release.sh"
         bash -n "$ROOT/scripts/check-hooks-path.sh"
@@ -37,6 +39,7 @@ case "${1:-}" in
         "$ROOT/tests/secrets-gitignore-test.sh"
         "$ROOT/tests/ansible-sops-workflow-test.sh"
         "$ROOT/tests/ansible-drift-acceptance-test.sh"
+        "$ROOT/tests/bootstrap-platform-acceptance-test.sh"
         "$ROOT/tests/hook-activation-test.sh"
         "$ROOT/hosts/ex44/sync-start-sh.sh" --check
         "$ROOT/scripts/start-sh-release.sh" --check

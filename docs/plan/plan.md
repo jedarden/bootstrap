@@ -20,6 +20,22 @@ on every subsequent login. `ex44.jedarden.com` in this workspace's fleet (the
 box this repo is checked out on, along with `lab.ardenone.com`) is a running
 instance of what this repo produces.
 
+## Supported system matrix
+
+The bootstrap's supported release contract is intentionally narrow: Debian 12
+(bookworm) and Ubuntu 24.04 LTS (noble), both on amd64. Other releases,
+derivatives, rolling distributions, and architectures are unsupported until
+they are explicitly added to the matrix and acceptance-tested. The host must
+be a root-run, interactive systemd installation with `bash`, `apt-get`,
+`dpkg`, `systemctl`, and `getent`, plus working DNS and outbound HTTPS.
+
+Operators run `scripts/bootstrap-preflight.sh` before the signed bootstrap
+artifact. It fails closed with exit 1 when `/etc/os-release` is missing or
+unknown, the family/release is not in the matrix, the architecture is not
+amd64, or a required command is absent. It never prompts or changes the host.
+The preflight has acceptance coverage for both supported families, an
+unsupported release, an unsupported distribution, and an unknown OS file.
+
 Distribution model: Forgejo (`git.ardenone.com`) is the commit source of
 truth per this workspace's hosting convention, mirrored to GitHub
 (`github.com/jedarden/bootstrap`). Both `bootstrap.sh`'s one-time downloaded

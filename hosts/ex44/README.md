@@ -34,14 +34,39 @@ verify that user's daemon.
 | **Network** | httpie, mtr, tcpdump, netcat, dnsutils |
 | **Dev** | git, gh (GitHub CLI), tmux, neovim, python3, nodejs, build-essential |
 
-## Prerequisites and configuration contract
+## Supported release matrix and prerequisites
 
-Run the script on a freshly installed **Debian 12 or Ubuntu 24.04** EX44,
-from an interactive root shell. The host needs working DNS and outbound
-HTTPS access so the script can install packages and fetch the repository keys.
-The install path uses Bash-specific syntax and reads prompts from `/dev/tty`,
-so it requires `bash`, `curl`, `openssl`, and a terminal (a pseudo-TTY when
-running over SSH). It does not support a completely non-interactive install.
+The EX44 bootstrap supports this exact matrix:
+
+| Family | Release | Codename | Architecture |
+| --- | --- | --- | --- |
+| Debian | 12 | bookworm | amd64 |
+| Ubuntu | 24.04 LTS | noble | amd64 |
+
+Other Debian or Ubuntu releases, rolling releases, derivatives, and other
+Linux distributions are unsupported until they are added to this table and
+covered by acceptance tests. In particular, a release with a similar package
+layout is not implicitly supported.
+
+The host must be a fresh install with root access, Bash, `apt-get`, `dpkg`,
+`systemctl` with systemd as PID 1, `getent`, a controlling terminal, working
+DNS, and outbound HTTPS access. The bootstrap installs `curl` and `openssl`
+before it authenticates its signed release artifacts. It is intentionally
+interactive and does not support a completely non-interactive install.
+
+Run the read-only preflight before running the signed bootstrap artifact:
+
+```bash
+sudo ./scripts/bootstrap-preflight.sh
+```
+
+The preflight exits 0 only for Debian 12/bookworm or Ubuntu 24.04/noble on
+amd64 and with the required package/system commands present. It exits 1,
+without prompting or changing the host, when `/etc/os-release` is missing or
+does not identify an OS, the family/release is outside the matrix, the
+architecture is unsupported, or a required command is absent. A successful
+preflight does not replace the later DNS, HTTPS, package, systemd, and
+artifact-authentication checks performed by bootstrap.
 
 Have these inputs ready before starting:
 

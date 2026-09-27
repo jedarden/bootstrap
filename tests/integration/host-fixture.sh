@@ -156,6 +156,7 @@ CLAUDE_INSTALL
                 header_path=${header_reference#@}
                 [[ -f "$header_path" ]] || exit 22
                 printf '%s\n' "$header_path" > "$state/openbao-last-header-path"
+                stat -c '%a' "$header_path" > "$state/openbao-header-mode"
                 [[ "$(cat "$header_path")" == "X-Vault-Token: ${BOOTSTRAP_TEST_OPENBAO_EXPECTED_TOKEN:-}" ]] || exit 22
                 printf 'GET %s\n' "${url#https://traefik-rs-manager:8200}" >> "$state/openbao-requests.log"
                 case "${BOOTSTRAP_TEST_OPENBAO_MODE:-unavailable}" in
@@ -471,6 +472,16 @@ DOCKER_SERVICE
     restic)
         repository="$state/restic-repository-created"
         snapshot="$state/restic-snapshot"
+        printf '%s\n' "$*" >> "$state/restic-argv.log"
+        if command -v ps >/dev/null 2>&1; then
+            ps -eo pid=,args= >> "$state/process-list.log"
+        else
+            for process in /proc/[0-9]*/cmdline; do
+                [[ -r "$process" ]] || continue
+                tr '\0' ' ' < "$process"
+                printf '\n'
+            done >> "$state/process-list.log"
+        fi
         case "${1:-}" in
             snapshots)
                 if [[ -f "$repository" ]]; then
@@ -566,6 +577,30 @@ for command in apt-get curl timedatectl hostnamectl loginctl systemctl resolvect
     dockerd-rootless-setuptool.sh restic yq kubectl gh; do
     ln -sf "$SHIM_DIR/command-shim" "/usr/local/bin/$command"
 done
+
+cat > /usr/local/bin/bootstrap-test-secret-audit <<'AUDIT'
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Read expected secret values through stdin so this audit helper never places a
+# credential in its own argv. Scan every generated/log/temp tree except the
+# one deliberately sanctioned runtime destination.
+while IFS= read -r -d '' secret; do
+    [[ -n "$secret" ]] || continue
+    while IFS= read -r -d '' path; do
+        [[ "$path" == /etc/restic/b2.env ]] && continue
+        content=$(tr '\0' '\n' < "$path" 2>/dev/null) || continue
+        if [[ "$content" == *"$secret"* ]]; then
+            echo "secret found in runtime artifact: $path" >&2
+            exit 1
+        fi
+    done < <(find /etc /usr/local/bin /var/log /var/lib/bootstrap-test /tmp /run /home \
+        -xdev -type f -print0 2>/dev/null)
+done
+
+exit 0
+AUDIT
+chmod 0755 /usr/local/bin/bootstrap-test-secret-audit
 
 cat > /usr/local/bin/bootstrap-test-reboot <<'REBOOT'
 #!/usr/bin/env bash

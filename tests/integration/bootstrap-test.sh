@@ -146,6 +146,10 @@ sops_env="$TMP/sops.env"
 write_private_env "$sops_env" \
     "BOOTSTRAP_B2_APPLICATION_KEY=$sops_b2_key" \
     "BOOTSTRAP_RESTIC_PASSWORD=$sops_restic_password"
+[[ $(stat -c %a "$sops_env") == 600 ]] || {
+    echo 'ASSERTION FAILED: SOPS environment input is not mode 0600' >&2
+    exit 1
+}
 
 run_bootstrap_with_sops() {
     local label=$1
@@ -255,6 +259,16 @@ assert_output_excludes() {
     local output=$2
     local text=$3
     if grep -Fq -- "$text" "$output"; then
+        echo "ASSERTION FAILED: $description" >&2
+        exit 1
+    fi
+}
+
+assert_runtime_secret_hygiene() {
+    local description=$1
+    shift
+    if ! printf '%s\0' "$@" | docker exec -i "$CONTAINER" \
+        /usr/local/bin/bootstrap-test-secret-audit; then
         echo "ASSERTION FAILED: $description" >&2
         exit 1
     fi
@@ -534,6 +548,8 @@ assert_file_contains 'interactive fallback supplies the restic password' \
     /etc/restic/b2.env 'test-password'
 assert_file_contains 'restic repository uses the configured prefix' \
     /etc/restic/b2.env 'RESTIC_REPOSITORY="b2:test-bucket:test-prefix/'
+assert_runtime_secret_hygiene 'interactive credentials stay out of argv, process listings, logs, and generated artifacts' \
+    'test-application-key' 'test-password'
 assert_container 'rootless Docker prerequisites are installed' \
     'grep -Eq "apt-get.*uidmap.*dbus-user-session.*fuse-overlayfs.*rootlesskit.*slirp4netns" /var/lib/bootstrap-test/commands.log'
 assert_container 'rootless Docker has a subuid range' \
@@ -654,6 +670,12 @@ assert_file_contains 'SOPS B2 key reaches the runtime restic environment' \
     /etc/restic/b2.env "$sops_b2_key"
 assert_file_contains 'SOPS restic password reaches the runtime restic environment' \
     /etc/restic/b2.env "$sops_restic_password"
+assert_output_excludes 'SOPS B2 key is not printed' \
+    "$TMP/sops-output" "$sops_b2_key"
+assert_output_excludes 'SOPS restic password is not printed' \
+    "$TMP/sops-output" "$sops_restic_password"
+assert_runtime_secret_hygiene 'SOPS credentials stay out of argv, process listings, logs, and generated artifacts' \
+    "$sops_b2_key" "$sops_restic_password"
 
 first_snapshot=$(docker exec "$CONTAINER" /usr/local/bin/bootstrap-test-snapshot)
 
@@ -716,6 +738,10 @@ assert_container 'OpenBao request passed the private token header contract' \
     'test -f /var/lib/bootstrap-test/openbao-api-contract-ok'
 assert_container 'OpenBao token header file is removed after the read' \
     '! test -e "$(cat /var/lib/bootstrap-test/openbao-last-header-path)"'
+assert_container 'OpenBao token header file was mode 0600 while present' \
+    '[[ $(cat /var/lib/bootstrap-test/openbao-header-mode) == 600 ]]'
+assert_runtime_secret_hygiene 'OpenBao credentials stay out of argv, process listings, logs, and generated artifacts' \
+    "$openbao_token" "$openbao_b2_key" "$openbao_restic_password"
 
 partial_openbao_key='partial-openbao-application-key'
 partial_openbao_env="$TMP/partial-openbao.env"
@@ -796,6 +822,12 @@ assert_file_contains 'unavailable OpenBao falls back to the interactive password
     /etc/restic/b2.env 'unavailable-fallback-password'
 assert_output_excludes 'unavailable OpenBao token is not printed' \
     "$unavailable_openbao_output" "$openbao_token"
+assert_container 'unavailable OpenBao header file is removed after a failed read' \
+    '! test -e "$(cat /var/lib/bootstrap-test/openbao-last-header-path)"'
+assert_container 'unavailable OpenBao header file was mode 0600 while present' \
+    '[[ $(cat /var/lib/bootstrap-test/openbao-header-mode) == 600 ]]'
+assert_runtime_secret_hygiene 'interactive fallback after unavailable OpenBao stays free of credentials in runtime artifacts' \
+    "$openbao_token" 'unavailable-fallback-application-key' 'unavailable-fallback-password'
 
 openbao_request_count_before=$(docker exec "$CONTAINER" bash -ceu \
     "grep -c '^GET ' /var/lib/bootstrap-test/openbao-requests.log")
@@ -856,6 +888,8 @@ if docker exec "$CONTAINER" grep -Fq -- "$openbao_b2_key" /etc/restic/b2.env; th
     echo 'ASSERTION FAILED: SOPS/OpenBao rotation silently mixed stale OpenBao credentials' >&2
     exit 1
 fi
+assert_runtime_secret_hygiene 'SOPS rotation keeps both source credentials out of runtime artifacts' \
+    "$openbao_token" "$rotation_sops_b2_key" "$rotation_sops_restic_password"
 
 rotated_openbao_env="$TMP/rotated-openbao.env"
 write_private_env "$rotated_openbao_env" \

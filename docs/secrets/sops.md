@@ -76,12 +76,71 @@ access-audited recovery item and never make bootstrap fetch it automatically.
 
 ## Creating and editing encrypted files
 
-Install pinned, reviewed versions of `sops` and `age` on the operator
-workstation. [`sops.yaml.example`](sops.yaml.example) shows the repository
-rules; copy it to a root `.sops.yaml`, replace both public-recipient
-placeholders, and commit that public configuration with the encrypted files.
-Creation rules are evaluated in order; keep the specific bootstrap and
-Ansible rules before any fallback rule.
+### Reviewed operator toolchain
+
+The supported operator toolchain is pinned to the following exact releases as
+reviewed on 2026-09-27:
+
+| Tool | Supported version | Release source |
+| --- | --- | --- |
+| SOPS | `v3.13.3` | [getsops/sops v3.13.3](https://github.com/getsops/sops/releases/tag/v3.13.3) |
+| age | `v1.3.2` | [FiloSottile/age v1.3.2](https://github.com/FiloSottile/age/releases/tag/v1.3.2) |
+
+Do not rely on an unpinned `latest`, a moving package-manager channel, or a
+different major/minor version for operator runs. Before editing or decrypting,
+run `sops --version` and `age --version`; the repository validation command
+[`tests/sops-age-tooling-test.sh`](../../tests/sops-age-tooling-test.sh) rejects
+other versions. This pin applies to the operator workstation only; bootstrap
+does not install either tool and never needs an age private key.
+
+For a Linux amd64 workstation, install the reviewed binaries into a private
+operator bin directory and verify their published checksums before putting
+that directory on `PATH`:
+
+```bash
+install -d -m 700 "$HOME/.local/bin" "$HOME/.cache/sops-age-v3.13.3-v1.3.2"
+cd "$HOME/.cache/sops-age-v3.13.3-v1.3.2"
+
+curl -fsSLO https://github.com/getsops/sops/releases/download/v3.13.3/sops-v3.13.3.linux.amd64
+curl -fsSLO https://github.com/getsops/sops/releases/download/v3.13.3/sops-v3.13.3.checksums.txt
+sha256sum -c sops-v3.13.3.checksums.txt --ignore-missing
+install -m 0755 sops-v3.13.3.linux.amd64 "$HOME/.local/bin/sops"
+
+curl -fsSLO https://github.com/FiloSottile/age/releases/download/v1.3.2/age-v1.3.2-linux-amd64.tar.gz
+printf '%s  %s\n' \
+  cbe24006683f8eb669266162894b9a522a1af52f2665fbc63a4bb032ed26ac10 \
+  age-v1.3.2-linux-amd64.tar.gz | sha256sum -c -
+tar -xzf age-v1.3.2-linux-amd64.tar.gz
+install -m 0755 age/age age/age-keygen "$HOME/.local/bin/"
+
+export PATH="$HOME/.local/bin:$PATH"
+sops --version
+age --version
+```
+
+The checksum line above is for the official Linux amd64 age archive. Select
+the matching asset and checksum from the pinned release for another
+architecture. SOPS publishes a signed checksums file; where `cosign` is
+available, verify that signature before `sha256sum`:
+
+```bash
+curl -fsSLO https://github.com/getsops/sops/releases/download/v3.13.3/sops-v3.13.3.checksums.sigstore.json
+cosign verify-blob sops-v3.13.3.checksums.txt \
+  --bundle sops-v3.13.3.checksums.sigstore.json \
+  --certificate-identity-regexp='https://github.com/getsops' \
+  --certificate-oidc-issuer='https://token.actions.githubusercontent.com'
+```
+
+The age release provides Sigsum proofs for its archives; verify the proof
+when using a pre-built binary outside a trusted package repository. Do not
+copy an identity file, checksum workspace, or decrypted output into this
+repository.
+
+[`sops.yaml.example`](sops.yaml.example) shows the repository rules; copy it
+to a root `.sops.yaml`, replace both public-recipient placeholders, and commit
+that public configuration with the encrypted files. Creation rules are
+evaluated in order; keep the specific bootstrap and Ansible rules before any
+fallback rule.
 
 Create or edit the encrypted dotenv file directly. `sops edit` opens a
 temporary plaintext editor buffer and writes ciphertext back to the target:
@@ -248,10 +307,15 @@ sops filestatus secrets/bootstrap/ex44.sops.env
 git diff --check
 bash -n hosts/ex44/bootstrap.sh
 scripts/definition-of-done.sh --fast
+tests/sops-age-tooling-test.sh
 ```
 
-Also decrypt with the primary identity and, during a planned recovery drill,
-with the offline identity. The clean-extraction definition-of-done check must
-pass before a change is pushed. A successful `sops filestatus` proves the file
-has SOPS metadata; it does not prove that every intended recipient can still
-decrypt it.
+The tooling test checks the exact supported versions, encrypts and decrypts
+ephemeral data with both generated recipients, confirms an unrelated identity
+cannot decrypt, and keeps all private identities, plaintext, and command
+diagnostics in a mode-0700 temporary directory. It prints no key or fixture
+value. Also decrypt a real encrypted file with the primary identity and,
+during a planned recovery drill, with the offline identity. The clean-
+extraction definition-of-done check must pass before a change is pushed. A
+successful `sops filestatus` proves the file has SOPS metadata; it does not
+prove that every intended recipient can still decrypt it.

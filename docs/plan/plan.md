@@ -1062,3 +1062,50 @@ managed directory reconciliation converges to the same private layout.
 - Any future change to the home layout, launcher location, or ownership model
   must update this ADR, the EX44 workspace verification instructions, and the
   disposable-host acceptance in the same change.
+
+## ADR-17: 2026-09-27 — Rotate host SSH keys through signed host artifacts
+
+### Context
+
+The bootstrap installs SSH access from host-specific public-key files, while
+the release helper signs those files alongside the bootstrap and launcher.
+Changing a key file without regenerating the dependent release artifacts can
+leave a host with stale access inputs or make the rollout impossible to audit.
+Replacing the only authorized key in one step also risks locking out the
+operator before the replacement has been tested.
+
+### Decision
+
+Host SSH public keys remain declared inputs under `hosts/<host>/keys/`. The
+current EX44 lineage declares `jedarden.pub` as required and `jeda-mbp.pub` as
+the compatibility/secondary input. The release manifest covers both files;
+bootstrap authenticates the manifest and each key digest before writing the
+verified set to every configured user's `authorized_keys`.
+
+The operator rotates one declared input at a time and keeps an independently
+approved key in the other input as a fallback. When a spare slot is needed to
+stage a new key, the transition release retains the old key, the new key is
+verified from a fresh connection, and a later forward release retires the old
+key. Every affected bootstrap, launcher, version marker, immutable archive,
+manifest, signature, and host-key input is reviewed and committed together.
+Private SSH keys never enter the repository or release command arguments.
+
+The runbook is `docs/security/ssh-key-rotation.md`. The offline acceptance
+test generates disposable SSH keys, changes a host-specific input, runs the
+real release helper with a path-only artifact signing key, verifies the signed
+manifest and regenerated artifacts, and exercises a disposable `sshd` before
+and after rollout. It requires fallback and replacement access after the
+change and rejects authentication with the retired private key.
+
+### Consequences
+
+- A host rotation is reviewable from the changed key input, signed manifest,
+  and generated release artifacts rather than from a live file alone.
+- An unchanged approved key remains a recovery path while the replacement is
+  tested; a host with no fallback requires an explicitly approved out-of-band
+  path before rotation.
+- Old keys may remain in historical Git commits and immutable manifests for
+  auditability, but they must not remain in the deployed `authorized_keys`
+  after retirement.
+- The acceptance test covers the continuity and revocation properties that
+  static manifest-digest checks cannot prove.

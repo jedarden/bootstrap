@@ -202,6 +202,24 @@ byte-compares the raw `bootstrap.sh`, `start.sh`, `start.sh.version`, and
 `bootstrap-<version>.sh` files with that commit. `publish` runs the same check
 after pushing to Forgejo and waits for the mirror and raw files to converge.
 
+### SSH public-key rotation
+
+Host access keys are host-specific inputs under `hosts/<host>/keys/` and are
+covered by the signed artifact manifest. Rotate one declared key at a time,
+retain an independently approved fallback during rollout, regenerate and sign
+the complete release with `scripts/start-sh-release.sh`, and verify a fresh
+connection with the replacement before ending the existing session. After all
+supported hosts have crossed the release, retire the old key in a later
+forward release and verify that a connection using its private key fails. The
+full runbook, including the safe single-key and spare-slot cases, is in the
+[SSH public-key rotation procedure](./docs/security/ssh-key-rotation.md).
+
+Run the offline acceptance test before committing a rotation:
+
+```bash
+tests/ssh-key-rotation-test.sh
+```
+
 To roll back a bad release, restore a known-good launcher from Git history
 under a new, higher version, then review, commit, and publish it:
 

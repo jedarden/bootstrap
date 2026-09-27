@@ -40,6 +40,8 @@ assert_release() {
         fail 'embedded launcher has the wrong version'
     [[ "$(<"$FIXTURE/hosts/ex44/start.sh.version")" == "$version" ]] ||
         fail 'advertised launcher version is wrong'
+    (cd "$FIXTURE" && hosts/ex44/sync-start-sh.sh --check >/dev/null) ||
+        fail 'embedded launcher copy is not synchronized with start.sh'
 }
 
 mkdir -p "$FIXTURE/scripts" "$FIXTURE/hosts/ex44"
@@ -85,6 +87,25 @@ printf '%s\n' \
     'done' > "$FORGEJO_BARE/hooks/post-receive"
 chmod +x "$FORGEJO_BARE/hooks/post-receive"
 git -C "$FIXTURE" push -q origin HEAD:main
+
+echo 'Checking --check rejects an embedded launcher copy drift...'
+cp -p "$FIXTURE/hosts/ex44/bootstrap.sh" "$TMP/bootstrap-good.sh"
+printf '# embedded copy drift\n' >> "$FIXTURE/hosts/ex44/bootstrap.sh"
+if (cd "$FIXTURE" && scripts/start-sh-release.sh --check >/dev/null 2>&1); then
+    fail '--check unexpectedly accepted an embedded launcher copy drift'
+fi
+mv "$TMP/bootstrap-good.sh" "$FIXTURE/hosts/ex44/bootstrap.sh"
+(cd "$FIXTURE" && scripts/start-sh-release.sh --check >/dev/null) ||
+    fail '--check did not recover after restoring the embedded launcher copy'
+
+echo 'Checking non-forward releases are rejected without changing release files...'
+for version in 1.3.1 1.3.0; do
+    if (cd "$FIXTURE" && scripts/start-sh-release.sh release "$version" >/dev/null 2>&1); then
+        fail "non-forward release $version was unexpectedly accepted"
+    fi
+done
+git -C "$FIXTURE" diff --quiet -- hosts/ex44 ||
+    fail 'a rejected non-forward release changed the release files'
 
 echo 'Checking release archive generation and metadata...'
 (cd "$FIXTURE" && scripts/start-sh-release.sh release 1.3.2 >/dev/null)

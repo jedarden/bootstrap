@@ -298,6 +298,44 @@ After any suspected credential disclosure, revoke or rotate the affected B2
 key, restic key, OpenBao token, and age recipient as applicable. Treat old
 SOPS ciphertext as compromised if an age private key was exposed.
 
+## Offline recovery drill
+
+Run the drill before retiring, rotating, or placing the primary operator
+identity out of service. The recovery identity must be available as a
+separately protected offline copy, readable only by the operator (`0600`), and
+must not be stored beside the primary identity or the data it unlocks. The
+repository contains no real ciphertext or private key; the no-argument mode
+uses disposable bootstrap-style dotenv and Ansible-style YAML fixtures to
+exercise the complete sequence:
+
+```bash
+tests/sops-recovery-drill.sh
+```
+
+The disposable drill checks that the recovery identity is present and valid,
+decrypts both fixtures with the primary identity, makes that disposable
+primary identity unavailable, and then decrypts both fixtures using only the
+recovery identity. It never prints an identity or plaintext and removes its
+mode-0700 temporary directory on exit.
+
+To verify the real encrypted files after the primary identity is unavailable,
+provide only the path to the offline recovery identity and the two ciphertext
+paths:
+
+```bash
+SOPS_RECOVERY_IDENTITY=/secure/offline/age-recovery.txt \
+  tests/sops-recovery-drill.sh \
+  secrets/bootstrap/ex44.sops.env \
+  secrets/ansible/ex44.sops.yml
+```
+
+The real-file mode uses a fresh `HOME` and XDG config directory, unsets
+`SOPS_AGE_KEY` and `SOPS_AGE_RECIPIENTS`, sets `SOPS_AGE_KEY_FILE` to the
+recovery file, confirms both inputs report encrypted SOPS metadata, and sends
+decrypted output to `/dev/null`. This isolates the drill from a missing or
+unreadable primary identity and proves that both the bootstrap and Ansible
+files remain recoverable without writing plaintext to disk.
+
 ## Verification checklist
 
 Before committing or applying a change:
@@ -308,14 +346,16 @@ git diff --check
 bash -n hosts/ex44/bootstrap.sh
 scripts/definition-of-done.sh --fast
 tests/sops-age-tooling-test.sh
+tests/sops-recovery-drill.sh
 ```
 
 The tooling test checks the exact supported versions, encrypts and decrypts
 ephemeral data with both generated recipients, confirms an unrelated identity
 cannot decrypt, and keeps all private identities, plaintext, and command
 diagnostics in a mode-0700 temporary directory. It prints no key or fixture
-value. Also decrypt a real encrypted file with the primary identity and,
-during a planned recovery drill, with the offline identity. The clean-
-extraction definition-of-done check must pass before a change is pushed. A
-successful `sops filestatus` proves the file has SOPS metadata; it does not
-prove that every intended recipient can still decrypt it.
+value. The recovery drill additionally proves that the offline identity is
+available with safe permissions and still decrypts both real file formats
+after the primary path is isolated. The clean-extraction definition-of-done
+check must pass before a change is pushed. A successful `sops filestatus`
+proves the file has SOPS metadata; it does not prove that every intended
+recipient can still decrypt it.

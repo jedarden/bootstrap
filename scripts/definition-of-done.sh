@@ -10,6 +10,7 @@ case "${1:-}" in
         bash -n "$ROOT/tests/integration/host-fixture.sh"
         bash -n "$ROOT/tests/integration/bootstrap-test.sh"
         bash -n "$ROOT/tests/start-sh-self-update-test.sh"
+        bash -n "$ROOT/tests/sops-recovery-drill.sh"
         bash -n "$ROOT/tests/hetzner-robot-test.sh"
         bash -n "$ROOT/scripts/start-sh-release.sh"
         "$ROOT/tests/start-sh-self-update-test.sh"

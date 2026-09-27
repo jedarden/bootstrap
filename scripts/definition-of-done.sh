@@ -12,6 +12,7 @@ case "${1:-}" in
         bash -n "$ROOT/tests/integration/bootstrap-test.sh"
         bash -n "$ROOT/tests/start-sh-self-update-test.sh"
         bash -n "$ROOT/tests/start-sh-release-test.sh"
+        bash -n "$ROOT/tests/secrets-gitignore-test.sh"
         bash -n "$ROOT/tests/sops-recovery-drill.sh"
         bash -n "$ROOT/tests/hetzner-robot-test.sh"
         bash -n "$ROOT/scripts/start-sh-release.sh"
@@ -19,6 +20,7 @@ case "${1:-}" in
         bash -n "$ROOT/tests/hook-activation-test.sh"
         "$ROOT/tests/start-sh-self-update-test.sh"
         "$ROOT/tests/start-sh-release-test.sh"
+        "$ROOT/tests/secrets-gitignore-test.sh"
         "$ROOT/tests/hook-activation-test.sh"
         "$ROOT/hosts/ex44/sync-start-sh.sh" --check
         "$ROOT/scripts/start-sh-release.sh" --check

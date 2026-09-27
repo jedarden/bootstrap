@@ -52,12 +52,32 @@ Install mode has no flags for supplying these values. Its supported flags are
 only `--version`/`-v` and `--verify`/`--check`; all installation choices are
 collected by prompts.
 
+### Secret sourcing: SOPS first, OpenBao fallback
+
+The supported operator workflow is documented in
+[`docs/secrets/sops.md`](../../docs/secrets/sops.md). It stores the B2
+application key and restic password in a SOPS-encrypted dotenv file and uses
+`sops exec-env` to expose them only to the one bootstrap process. The
+bootstrap script accepts the pair as `BOOTSTRAP_B2_APPLICATION_KEY` and
+`BOOTSTRAP_RESTIC_PASSWORD`; it does not need SOPS, an age private key, or a
+plaintext secret file on the target host.
+
+When backup is configured, secret-source precedence is:
+
+1. both values supplied through the SOPS process environment;
+2. both values fetched from OpenBao; or
+3. interactive prompts.
+
+The script refuses a partial SOPS pair rather than mixing sources. SOPS
+values are never written to `/etc/bootstrap/config`; the resulting runtime
+credentials are written to `/etc/restic/b2.env` with mode `0600`, as before.
+
 ### Optional: OpenBao secret sourcing
 
-Instead of typing the B2 application key and restic password on every run,
-set `OPENBAO_TOKEN` in the environment before starting. OpenBao lookup is
-attempted only when Tailscale is active; otherwise the script falls back to
-the prompts. The expected KV-v2 data is:
+OpenBao remains the host-side fallback for re-bootstrap and recovery when the
+operator cannot use SOPS. Set `OPENBAO_TOKEN` in the environment before
+starting. Lookup is attempted only when Tailscale is active; otherwise the
+script falls back to the prompts. The expected KV-v2 data is:
 
 ```json
 {

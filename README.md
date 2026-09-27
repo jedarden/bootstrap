@@ -31,7 +31,7 @@ alongside the current script in the host directory that shipped them. See
 
 - [Ansible playbooks for drift management](./ansible/README.md)
 - [Kubernetes-based Hetzner Robot provisioning](./automation/hetzner_robot/README.md)
-- SOPS-encrypted secrets
+- [SOPS-encrypted secrets](./docs/secrets/sops.md)
 
 ## Development
 

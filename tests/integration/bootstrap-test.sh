@@ -78,16 +78,6 @@ test-password
 test-password
 INPUT
 
-second_input="$TMP/second-input"
-cat > "$second_input" <<'INPUT'
-
-
-test-application-key
-test-password
-test-password
-
-INPUT
-
 run_bootstrap() {
     local label=$1
     local input=$2
@@ -105,6 +95,52 @@ run_bootstrap() {
         cat "$output" >&2
         exit 1
     }
+}
+
+sops_b2_key='sops-application-key'
+sops_restic_password='sops-password'
+sops_input="$TMP/sops-input"
+printf '\n\n\n' > "$sops_input"
+
+run_bootstrap_with_sops() {
+    local label=$1
+    local input=$2
+    local output="$TMP/$label-output"
+
+    echo "Running bootstrap ($label) with SOPS environment input..."
+    if ! docker exec -i \
+        -e "BOOTSTRAP_B2_APPLICATION_KEY=$sops_b2_key" \
+        -e "BOOTSTRAP_RESTIC_PASSWORD=$sops_restic_password" \
+        "$CONTAINER" bash /test/bootstrap-under-test.sh \
+        < "$input" > "$output" 2>&1; then
+        echo "bootstrap failed during $label; output follows:" >&2
+        cat "$output" >&2
+        exit 1
+    fi
+    grep -Fq 'Using backup secrets supplied by SOPS through the process environment.' "$output" || {
+        echo "bootstrap did not use SOPS input during $label; output follows:" >&2
+        cat "$output" >&2
+        exit 1
+    }
+    grep -Fq '=== Bootstrap Complete' "$output" || {
+        echo "bootstrap did not report completion during $label; output follows:" >&2
+        cat "$output" >&2
+        exit 1
+    }
+}
+
+partial_sops_output="$TMP/partial-sops-output"
+if docker exec -i \
+    -e "BOOTSTRAP_B2_APPLICATION_KEY=$sops_b2_key" \
+    "$CONTAINER" bash /test/bootstrap-under-test.sh \
+    </dev/null > "$partial_sops_output" 2>&1; then
+    echo 'ASSERTION FAILED: bootstrap accepted a partial SOPS secret pair' >&2
+    exit 1
+fi
+grep -Fq 'SOPS bootstrap input must provide both backup secrets' "$partial_sops_output" || {
+    echo 'ASSERTION FAILED: partial SOPS pair produced the wrong diagnostic' >&2
+    cat "$partial_sops_output" >&2
+    exit 1
 }
 
 assert_container() {
@@ -352,9 +388,15 @@ assert_container 'restored data is usable by the configured user' \
 assert_container 'restore drill preserves user ownership' \
     '[[ $(stat -c %U:%G /home/coding/workspace/restore-drill/marker.txt) == coding:coding ]]'
 
+run_bootstrap_with_sops sops "$sops_input"
+assert_file_contains 'SOPS B2 key reaches the runtime restic environment' \
+    /etc/restic/b2.env "$sops_b2_key"
+assert_file_contains 'SOPS restic password reaches the runtime restic environment' \
+    /etc/restic/b2.env "$sops_restic_password"
+
 first_snapshot=$(docker exec "$CONTAINER" /usr/local/bin/bootstrap-test-snapshot)
 
-run_bootstrap second "$second_input"
+run_bootstrap_with_sops second "$sops_input"
 
 echo 'Checking second-run convergence...'
 second_snapshot=$(docker exec "$CONTAINER" /usr/local/bin/bootstrap-test-snapshot)

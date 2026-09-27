@@ -196,6 +196,11 @@ USERS=()
 B2_BUCKET=""
 B2_PATH_PREFIX=""
 B2_ACCOUNT_ID=""
+# SOPS passes these values through the environment for one bootstrap process.
+# Keep the input names distinct from the runtime B2/restic variables so an
+# accidentally inherited environment cannot be mistaken for SOPS input.
+SOPS_B2_APPLICATION_KEY="${BOOTSTRAP_B2_APPLICATION_KEY:-}"
+SOPS_RESTIC_PASSWORD="${BOOTSTRAP_RESTIC_PASSWORD:-}"
 B2_ACCOUNT_KEY=""
 RESTIC_PASSWORD=""
 REBOOT_AFTER_BOOTSTRAP=false
@@ -203,6 +208,23 @@ BACKUP_CONFIGURED=false
 RESTORE_FROM_BACKUP=false
 TAILSCALE_AUTHKEY=""
 CLOUDFLARED_TOKEN=""
+
+# A SOPS environment file must contain both backup secrets. Do not silently
+# combine one SOPS value with one OpenBao value or an interactive prompt.
+SOPS_SECRETS_AVAILABLE=false
+if [[ -n "$SOPS_B2_APPLICATION_KEY" || -n "$SOPS_RESTIC_PASSWORD" ]]; then
+    if [[ -z "$SOPS_B2_APPLICATION_KEY" || -z "$SOPS_RESTIC_PASSWORD" ]]; then
+        echo "ERROR: SOPS bootstrap input must provide both backup secrets" >&2
+        echo "       (BOOTSTRAP_B2_APPLICATION_KEY and BOOTSTRAP_RESTIC_PASSWORD)." >&2
+        exit 1
+    fi
+    B2_ACCOUNT_KEY="$SOPS_B2_APPLICATION_KEY"
+    RESTIC_PASSWORD="$SOPS_RESTIC_PASSWORD"
+    SOPS_SECRETS_AVAILABLE=true
+fi
+# Do not pass the SOPS-specific names to child processes after capturing them.
+unset BOOTSTRAP_B2_APPLICATION_KEY BOOTSTRAP_RESTIC_PASSWORD
+unset SOPS_B2_APPLICATION_KEY SOPS_RESTIC_PASSWORD
 
 # Function to save configuration (non-sensitive values only)
 save_config() {
@@ -314,7 +336,7 @@ if ! $USE_PREVIOUS_CONFIG; then
 fi
 
 # ===========================================
-# Prompt for secrets (always required)
+# Prompt for secrets (always required unless supplied by SOPS/OpenBao)
 # ===========================================
 echo ""
 echo "--- Secrets (required each run) ---"
@@ -363,20 +385,27 @@ fetch_secrets_from_openbao() {
 
     echo "Checking OpenBao for pre-provisioned secrets at $openbao_addr..."
 
-    # Try to fetch the secret with a short timeout
-    if ! timeout 5 curl -fsk -X GET \
-        "${openbao_addr}/v1/${secret_path}" \
-        -H "X-Vault-Token: ${OPENBAO_TOKEN:-}" \
-        &>/dev/null; then
+    if [[ -z "${OPENBAO_TOKEN:-}" ]]; then
         echo "No OpenBao token provided or OpenBao unreachable."
         return 1
     fi
 
+    # Keep the token out of curl's argv and logs. curl accepts a header file;
+    # the temporary file is private and removed before the response is parsed.
+    local header_file secret_response
+    header_file=$(mktemp)
+    chmod 600 "$header_file"
+    printf 'X-Vault-Token: %s\n' "$OPENBAO_TOKEN" > "$header_file"
+
     # Fetch and parse the secret response
-    local secret_response
-    secret_response=$(curl -fsk -X GET \
+    if ! secret_response=$(timeout 5 curl -fsk -X GET \
         "${openbao_addr}/v1/${secret_path}" \
-        -H "X-Vault-Token: ${OPENBAO_TOKEN}" 2>/dev/null) || return 1
+        -H "@$header_file" 2>/dev/null); then
+        rm -f -- "$header_file"
+        echo "No OpenBao token provided or OpenBao unreachable."
+        return 1
+    fi
+    rm -f -- "$header_file"
 
     # Check if the secret exists
     if ! echo "$secret_response" | jq -e '.data.data' &>/dev/null; then
@@ -408,12 +437,13 @@ BACKUP_CONFIGURED=false
 RESTORE_FROM_BACKUP=false
 
 if [[ -n "$B2_BUCKET" && -n "$B2_ACCOUNT_ID" ]]; then
-    # Try OpenBao first if OPENBAO_TOKEN is set
-    OPENBAO_SECS_FETCHED=false
-    if [[ -n "${OPENBAO_TOKEN:-}" ]] && command -v tailscale &>/dev/null && systemctl is-active --quiet tailscale; then
+    SECRETS_ALREADY_AVAILABLE="$SOPS_SECRETS_AVAILABLE"
+    if $SOPS_SECRETS_AVAILABLE; then
+        echo "Using backup secrets supplied by SOPS through the process environment."
+    elif [[ -n "${OPENBAO_TOKEN:-}" ]] && command -v tailscale &>/dev/null && systemctl is-active --quiet tailscale; then
         echo "Attempting to fetch B2 secrets from OpenBao..."
         if fetch_secrets_from_openbao; then
-            OPENBAO_SECS_FETCHED=true
+            SECRETS_ALREADY_AVAILABLE=true
         fi
     elif [[ -n "${OPENBAO_TOKEN:-}" ]]; then
         echo "Note: OPENBAO_TOKEN set, but Tailscale not running yet."
@@ -421,14 +451,14 @@ if [[ -n "$B2_BUCKET" && -n "$B2_ACCOUNT_ID" ]]; then
         echo "On re-run with Tailscale active, secrets will be fetched automatically."
     fi
 
-    # Fall back to interactive prompts if OpenBao didn't work
-    if ! $OPENBAO_SECS_FETCHED; then
+    # Fall back to interactive prompts if neither SOPS nor OpenBao worked.
+    if ! $SECRETS_ALREADY_AVAILABLE; then
         echo ""
         read -p "B2 Application Key: " B2_ACCOUNT_KEY <&3
     fi
 
     if [[ -n "$B2_ACCOUNT_KEY" ]]; then
-        if ! $OPENBAO_SECS_FETCHED; then
+        if ! $SECRETS_ALREADY_AVAILABLE; then
             read -sp "Backup encryption password: " RESTIC_PASSWORD <&3
             echo ""
             read -sp "Confirm encryption password: " RESTIC_PASSWORD_CONFIRM <&3

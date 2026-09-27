@@ -46,9 +46,12 @@ cp inventory/hosts.yml.example inventory/hosts.yml
 ${EDITOR:-vi} inventory/hosts.yml
 ```
 
-Put secret values such as `bootstrap_restic_env` in an Ansible Vault file or a
-secret-management-backed variable source. Do not put credentials in the
-repository, inventory example, command arguments, or logs.
+Put secret values such as `bootstrap_restic_env` in the repository's
+SOPS-encrypted YAML workflow described in [`../docs/secrets/sops.md`](../docs/secrets/sops.md),
+or another secret-management-backed variable source. Do not put credentials
+in the repository, inventory example, command arguments, or logs. When using
+SOPS, pass the decrypted YAML through `sops exec-file` and Ansible's `-e @{}`
+FIFO form; do not place a plaintext file under `group_vars/`.
 
 Preview and apply the complete reconciliation with an explicit limit:
 

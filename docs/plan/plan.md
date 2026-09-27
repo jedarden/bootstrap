@@ -728,3 +728,83 @@ and secret material.
 - API-level tests use a local HTTP server and validate authentication, form
   encoding, idempotence, retry classification, safe drift refusal, and reset
   recovery without contacting Hetzner.
+
+## ADR-11: 2026-09-27 — SOPS is the encrypted operator source; OpenBao remains the host fallback
+
+### Context
+
+The bootstrap script has two existing ways to obtain B2/restic credentials:
+interactive prompts and an optional OpenBao KV-v2 lookup at
+secret/bootstrap/<hardware-uuid>/b2. Ansible can write the same credentials
+from encrypted variables, but the repository did not define the encryption
+format, key custody, or how a fresh-host operator should consume those
+variables. Putting plaintext credentials in inventory, command arguments, or
+the bootstrap configuration would make the recovery path auditable only after
+the secret had already leaked.
+
+SOPS with age provides reviewable ciphertext while keeping decryption keys
+off the host. Its exec-env and exec-file flows also fit the two consumers:
+bootstrap needs a short-lived environment and Ansible needs a short-lived
+file-like input.
+
+### Decision
+
+Use SOPS-encrypted dotenv files under secrets/bootstrap/ for the bootstrap
+pair BOOTSTRAP_B2_APPLICATION_KEY and BOOTSTRAP_RESTIC_PASSWORD, and
+SOPS-encrypted YAML files under secrets/ansible/ for Ansible variables.
+Only files with an explicit .sops suffix may be tracked in those trees;
+plaintext working files, age identities, OpenBao tokens, and decrypted output
+are excluded from Git.
+
+Use two independent age recipients: a primary operator recipient and an
+offline recovery recipient. Public recipients belong in the repository's
+SOPS creation rules and encrypted-file metadata; private identities remain in
+mode-0600 operator/recovery storage. Bootstrap never installs SOPS or an age
+identity and never downloads ciphertext to decrypt locally.
+
+For backup configuration, source precedence is:
+
+1. a complete SOPS process environment;
+2. the existing OpenBao KV-v2 record, only after Tailscale is active; or
+3. interactive prompts.
+
+The bootstrap script rejects a partial SOPS pair and does not mix secret
+sources. SOPS takes precedence when explicitly supplied. OpenBao is retained
+as a host-side fallback for re-bootstrap and disaster recovery; it is not an
+automatic SOPS destination and does not hold the age private key. Updating
+both stores is an explicit operator action during credential rotation.
+
+The complete operator runbook, including key custody, exec-env/exec-file
+consumption, recipient/data-key rotation, B2/restic rotation, and recovery,
+lives in docs/secrets/sops.md.
+
+### Alternatives considered
+
+- Put an age private key on every host and decrypt there. Rejected: host
+  compromise would expose the repository's recovery key and every encrypted
+  secret, and bootstrap would depend on a second package/bootstrap chain.
+- Replace SOPS with OpenBao as the only source. Rejected: a fresh host
+  cannot rely on Tailscale and OpenBao before bootstrap, while SOPS gives an
+  offline operator path and reviewable changes.
+- Make SOPS automatically publish into OpenBao. Rejected: automatic
+  bidirectional synchronization creates unclear ownership and can overwrite a
+  deliberate emergency value. Rotation updates both stores in a controlled
+  sequence instead.
+- Pass decrypted values as command-line arguments or write temporary
+  plaintext files. Rejected: argv and leftover files are needlessly exposed.
+  SOPS process-environment/FIFO consumption keeps the plaintext lifetime
+  bounded to the consumer.
+
+### Consequences
+
+- Bootstrap now accepts an explicit SOPS process-environment pair without
+  changing the existing interactive interface or /etc/restic/b2.env output.
+- Operators can bootstrap a host without putting an age key or SOPS binary on
+  it, and can recover through either the offline age identity or the existing
+  OpenBao path.
+- Encrypted files remain recoverable only while at least one recipient private
+  identity is available. Recipient rotation therefore requires a recovery test
+  before retiring an old identity.
+- B2 application-key rotation and restic repository-key rotation are separate
+  operations; changing the restic password alone is not a safe repository
+  rotation.

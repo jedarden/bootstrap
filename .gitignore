@@ -23,3 +23,12 @@
 ansible/inventory/hosts.yml
 ansible/group_vars/*.yml
 !ansible/group_vars/*.example.yml
+
+# SOPS plaintext working files are ignored; only files carrying the explicit
+# .sops suffix may be committed under the secrets tree.
+/secrets/*/*.env
+/secrets/*/*.yaml
+/secrets/*/*.yml
+!/secrets/*/*.sops.env
+!/secrets/*/*.sops.yaml
+!/secrets/*/*.sops.yml

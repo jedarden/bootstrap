@@ -34,6 +34,15 @@ operator manages separately. Authorized-key replacement is opt-in with
 `bootstrap_manage_authorized_keys: true`; keep it false until every key is
 present in the encrypted inventory.
 
+For each `bootstrap_users` entry, the role converges `/home/<user>` and the
+managed `.tmp/`, `.cache/`, and `workspace/` directories to that user's
+ownership. The home and managed directories are mode `0700`, `.ssh/` is
+`0700`, and an opted-in `authorized_keys` file is `0600`. This is the same
+filesystem boundary used by the interactive bootstrap: an unprivileged user
+can use its own workspace but cannot traverse another user's home. The role
+does not install or rewrite `start.sh`; the signed per-user launcher remains
+owned by the bootstrap/release workflow.
+
 Rootless Docker is opt-in with `bootstrap_manage_rootless_docker: true`. It
 installs the Docker client and rootless runtime prerequisites, allocates
 non-overlapping subordinate UID/GID ranges, disables the system daemon,

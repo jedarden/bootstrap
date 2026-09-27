@@ -994,3 +994,71 @@ does not appear in the fixture or release output.
   inferred from an untrusted copy of the public key.
 - Future replacements follow ADR-14's overlap rotation procedure rather than
   replacing the only trust anchor in one release.
+
+## ADR-16: 2026-09-27 — Per-user home trees are the workspace isolation boundary
+
+### Context
+
+The overview has always called the host a multi-user development environment,
+but the workspace contract was spread across bootstrap commands, Ansible
+defaults, and a broad security acceptance test. That made it easy to verify
+that a directory existed while leaving the ownership boundary and launcher
+entry point implicit. The contract must apply to every configured user, not
+only the default `coding` and `trading` pair.
+
+### Decision
+
+For every username in the persisted `USERS` configuration, bootstrap and the
+post-bootstrap Ansible role converge this layout under `/home/<user>`:
+
+| Path | Owner/group | Required mode or property |
+| --- | --- | --- |
+| `/home/<user>` | `<user>:<user>` | `0700`; the cross-user boundary |
+| `.ssh/` | `<user>:<user>` | `0700` |
+| `.ssh/authorized_keys` | `<user>:<user>` | `0600` |
+| `.tmp/`, `.cache/`, `workspace/` | `<user>:<user>` | user-owned and reachable only through the private home |
+| `start.sh` | `<user>:<user>` | executable canonical launcher |
+| `.local/bin/start` | `<user>:<user>` | symlink to that user's `start.sh`, created as the user |
+
+Bootstrap may create files as root while provisioning, but it must finish with
+no root-owned files in a configured user's home. The launcher is the same
+verified payload for every user, while `HOME`, its tmux configuration, its
+working directory, and its self-update target remain that user's paths.
+
+An unprivileged user must be able to create, read, and modify files in their
+own `workspace`, but must not be able to traverse another configured user's
+home or read or modify that user's workspace. Root and the configured sudo
+administrators remain explicit administrative exceptions; this contract is
+about the boundary between unprivileged users. Reruns, reboot recovery, and
+the documented restore path must preserve the same ownership boundary.
+
+The disposable-host integration acceptance exercises both configured users,
+checks the modes and ownership of the managed tree, resolves `start` through
+each user's PATH, executes each launcher without root, and attempts cross-user
+read and write operations. The Ansible acceptance separately checks that its
+managed directory reconciliation converges to the same private layout.
+
+### Alternatives considered
+
+- **Use one shared `/workspace` with per-project subdirectories.** Rejected:
+  it makes every access-control decision depend on the shared directory's
+  group and ACL state, and it does not match the existing `HOME`-relative
+  launcher, cache, temporary, and Docker paths.
+- **Rely on user names or shell conventions without filesystem permissions.**
+  Rejected: a username is routing metadata, not an access-control boundary;
+  the mode-`0700` home is the enforceable boundary checked by the kernel.
+- **Make Ansible own `start.sh`.** Rejected: launcher payloads are signed and
+  self-updating artifacts with their own release contract. Ansible owns the
+  stable home/workspace shape and deliberately leaves the launcher payload to
+  bootstrap and its verified self-update path.
+
+### Consequences
+
+- New users receive the same isolated layout and PATH launcher setup as the
+  defaults without adding user-specific test assumptions.
+- The parent home mode is the security-critical invariant; the managed child
+  directories remain user-owned and cannot be reached by a peer through the
+  normal filesystem path.
+- Any future change to the home layout, launcher location, or ownership model
+  must update this ADR, the EX44 workspace verification instructions, and the
+  disposable-host acceptance in the same change.

@@ -568,8 +568,11 @@ assert_container 'workspace trees contain no root-owned files' \
     'for user in coding trading; do \
          ! find /home/$user -xdev ! -user $user -print -quit | grep -q .; \
      done'
+echo 'Checking the documented per-user workspace and launcher contract...'
 assert_mode 'coding home is private' /home/coding 700
 assert_mode 'trading home is private' /home/trading 700
+assert_mode 'coding SSH directory is private' /home/coding/.ssh 700
+assert_mode 'trading SSH directory is private' /home/trading/.ssh 700
 assert_mode 'coding authorized keys are private' /home/coding/.ssh/authorized_keys 600
 assert_mode 'trading authorized keys are private' /home/trading/.ssh/authorized_keys 600
 assert_mode 'restic credentials are private' /etc/restic/b2.env 600
@@ -619,6 +622,12 @@ assert_container 'launcher is exposed on PATH' \
          [[ -L /home/$user/.local/bin/start ]] && \
          [[ $(readlink /home/$user/.local/bin/start) == /home/$user/start.sh ]]; \
      done'
+assert_container 'launchers are executable and user-owned' \
+    'for user in coding trading; do \
+         [[ -x /home/$user/start.sh ]] && \
+         [[ $(stat -c %U:%G /home/$user/start.sh) == $user:$user ]] && \
+         [[ $(stat -c %U:%G /home/$user/.local/bin/start) == $user:$user ]]; \
+     done'
 assert_container 'rootless Docker helpers are executable and user-owned' \
     'for user in coding trading; do \
          [[ -x /home/$user/bin/start-docker ]] && \
@@ -640,6 +649,9 @@ for user in coding trading; do
     assert_user_output "$user can execute start.sh without root" \
         "$user" 'start v' \
         "HOME=/home/$user /home/$user/.local/bin/start --version"
+    assert_user_output "$user can resolve start through its PATH" \
+        "$user" 'start v' \
+        "HOME=/home/$user PATH=/home/$user/.local/bin:/usr/local/bin:/usr/bin:/bin start --version"
 done
 for user in coding trading; do
     assert_user_output "$user can execute the launcher through its agent path" \

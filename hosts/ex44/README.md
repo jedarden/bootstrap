@@ -337,8 +337,25 @@ for user in "${users[@]}"; do
 done
 ```
 
-Expect private user homes (`700`), private authorized keys (`600`),
-user-owned workspace trees, and no root-owned files inside a user's home.
+The contract is the same for every configured user:
+
+- `/home/<user>` is owned by `<user>:<user>` and mode `700`. This is the
+  kernel-enforced boundary that prevents a peer from traversing the home.
+- `.ssh/` is mode `700` and `authorized_keys` is mode `600`.
+- `.tmp/`, `.cache/`, and `workspace/` are user-owned. The configured user can
+  write its own workspace, while an unprivileged peer cannot traverse the
+  private home to read or modify it.
+- `start.sh` is an executable, user-owned launcher, and
+  `.local/bin/start` is a user-owned symlink to it. Running `start` therefore
+  keeps the launcher's HOME, tmux state, working directory, and self-update
+  path inside that user's home.
+- Bootstrap-created content is reconciled to the user; no root-owned files
+  should remain anywhere under a configured user's home.
+
+The disposable-host integration test exercises these properties for both
+default users, including launcher execution through each user's PATH and
+cross-user read/write attempts. See [ADR-16](../../docs/plan/plan.md) for the
+architecture decision and scope of the administrative exceptions.
 
 #### Rootless Docker
 

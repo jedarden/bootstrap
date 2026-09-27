@@ -16,8 +16,11 @@ simulated reboot boundary that clears volatile service and user-runtime state,
 checks that enabled services and persisted workspaces recover, and runs the
 bootstrap again. SSH, UFW, fail2ban, auditd, Tailscale, rootless Docker,
 backup scheduling, user workspaces, and both launcher paths are checked both
-after the reboot and after that post-reboot rerun. The snapshot ignores the
-timestamp in `/etc/bootstrap/config` so it does not obscure convergence.
+after the reboot and after that post-reboot rerun. The per-user contract also
+checks private home and SSH modes, user-owned executable launchers, PATH
+resolution through `~/.local/bin/start`, and cross-user workspace read/write
+denials. The snapshot ignores the timestamp in `/etc/bootstrap/config` so it
+does not obscure convergence.
 
 The credential-path runs also audit the live restic command argv and process
 list, captured output for non-interactive sources, command logs, temporary

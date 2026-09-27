@@ -263,11 +263,23 @@ assert_target_contains() {
         die "target file $path does not contain the expected managed content"
 }
 
+assert_target_mode() {
+    local path=$1
+    local expected=$2
+    local actual
+    actual=$(docker exec "$CONTAINER" stat -c %a "$path")
+    [[ "$actual" == "$expected" ]] ||
+        die "target file $path has mode $actual, expected $expected"
+}
+
 echo 'Converging the isolated target for the first time...'
 run_ansible initial-convergence playbooks/drift.yml "$WORK/vars.yml"
 assert_changed initial-convergence
 assert_target_file /home/drift-user/.bashrc
 assert_target_file /home/drift-user/.tmux.conf
+assert_target_mode /home/drift-user 700
+assert_target_mode /home/drift-user/.cache 700
+assert_target_mode /home/drift-user/workspace 700
 assert_target_contains /etc/ssh/sshd_config.d/hardening.conf 'PasswordAuthentication no'
 assert_target_contains /etc/sysctl.d/99-hardening.conf 'kernel.randomize_va_space = 2'
 

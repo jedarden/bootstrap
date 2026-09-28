@@ -110,6 +110,9 @@ every release-helper invocation, for example:
 For the repeatable multi-host sequence—including staged and live parity,
 Forgejo/GitHub/raw convergence, deployment verification on every target, and
 forward-version rollback—follow the [release rollout runbook](./docs/release-rollout.md).
+The runbook's reviewed [`release-rollout-targets.tsv`](./docs/release-rollout-targets.tsv)
+map assigns each deployed machine to exactly one artifact lineage; validate
+it with `./scripts/check-rollout-targets.sh --live` and `--staged` before rollout.
 
 Forgejo remains the write-side source of truth. `publish` pushes only
 `origin/main`; the configured Forgejo mirror then publishes the same commit
@@ -129,6 +132,7 @@ tests/start-sh-self-update-test.sh
 tests/artifact-authentication-test.sh
 tests/signed-release-lifecycle-test.sh
 tests/host-lineage-onboarding-test.sh
+tests/rollout-target-map-test.sh
 tests/release-rollout-workflow-test.sh
 ```
 

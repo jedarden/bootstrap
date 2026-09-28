@@ -6,6 +6,26 @@ that intentionally has host-specific keys or hardening. The directory name is
 the release lineage; keep a separate, reviewed SSH target mapping for the
 machines that consume it.
 
+The operator-owned map is
+[`docs/release-rollout-targets.tsv`](./release-rollout-targets.tsv). It is a
+UTF-8 tab-separated file with the exact header `lineage<TAB>target`; comments
+begin with `#`, and each remaining row contains one immediate `hosts/<lineage>`
+directory and one literal `user@hostname` SSH destination. A lineage may have
+multiple target rows when several machines consume the same artifacts. A
+target hostname may appear only once, so a machine cannot silently cross from
+one lineage to another. Keep the map in the same reviewed change as any
+lineage or host-access change; do not source it as shell or infer targets from
+DNS.
+
+Validate both the worktree and the proposed index before rollout. The check
+rejects a missing map or lineage target, malformed or unknown lineages and
+targets, duplicate target hosts, and cross-lineage target reuse:
+
+~~~bash
+./scripts/check-rollout-targets.sh --live
+./scripts/check-rollout-targets.sh --staged
+~~~
+
 The release invariant is:
 
 ~~~text
@@ -25,8 +45,8 @@ older payload.
 ~~~bash
 VERSION=1.3.2
 KNOWN_GOOD_COMMIT=$(git rev-parse HEAD)
-HOST_DIRS=$(find hosts -mindepth 1 -maxdepth 1 -type d -print | sort)
-test -n "$HOST_DIRS"
+LINEAGE_DIRS=$(find hosts -mindepth 1 -maxdepth 1 -type d -print | sort)
+test -n "$LINEAGE_DIRS"
 ~~~
 
 Prepare the same release version independently for each lineage. The helper's
@@ -36,7 +56,7 @@ manifest and every artifact digest. Keep the signing private key outside the
 repository and pass only its path through ARTIFACT_SIGNING_KEY.
 
 ~~~bash
-for host_dir in $HOST_DIRS; do
+for host_dir in $LINEAGE_DIRS; do
     host=$(basename "$host_dir")
     ARTIFACT_SIGNING_KEY=/secure/path/bootstrap-artifacts-signing.pem ./scripts/start-sh-release.sh --host "$host" release "$VERSION"
     ./scripts/start-sh-release.sh --host "$host" --check
@@ -49,14 +69,17 @@ drift cannot hide behind a clean worktree check.
 
 ~~~bash
 ./scripts/check-host-parity.sh --live
+./scripts/check-rollout-targets.sh --live
 
 # Stage only the exact release files for each changed host. Repeat this block
 # for every host lineage; do not use git add . or git add -A.
 git add hosts/ex44/start.sh hosts/ex44/bootstrap.sh hosts/ex44/start.sh.version hosts/ex44/artifact-manifest.txt hosts/ex44/artifact-manifest.sig hosts/ex44/bootstrap-"$VERSION".sh
 # Add the corresponding six paths under each additional hosts/<name>/.
+git add docs/release-rollout-targets.tsv
 
 ./scripts/check-host-parity.sh --staged
-for host_dir in $HOST_DIRS; do
+./scripts/check-rollout-targets.sh --staged
+for host_dir in $LINEAGE_DIRS; do
     host=$(basename "$host_dir")
     ./scripts/start-sh-release.sh --host "$host" --check
 done
@@ -81,13 +104,13 @@ start.sh, version marker, signed manifest, signing/public keys, and current
 immutable archive with that commit.
 
 ~~~bash
-for host_dir in $HOST_DIRS; do
+for host_dir in $LINEAGE_DIRS; do
     host=$(basename "$host_dir")
     ./scripts/start-sh-release.sh --host "$host" publish
 done
 
 # Keep this explicit audit in the release record even though publish runs it.
-for host_dir in $HOST_DIRS; do
+for host_dir in $LINEAGE_DIRS; do
     host=$(basename "$host_dir")
     ./scripts/start-sh-release.sh --host "$host" distribution-check
 done
@@ -101,22 +124,19 @@ the mismatch.
 ## Roll out and verify every host
 
 The target map is operator-owned and intentionally separate from the
-repository's lineage directories. Review it before every rollout. The
-following deterministic SSH operation installs the already-reviewed launcher
-from the committed lineage, checks syntax before replacement, and prints the
-deployed version. It is also a recovery path when a host's old self-update
-cannot reach the new repository layout. A normal start invocation may
-self-update instead, but verify it with the same --no-update --version check
-after it completes.
+repository's lineage directories. Review and validate it before every
+rollout. The following deterministic SSH operation installs the
+already-reviewed launcher from each mapped lineage, checks syntax before
+replacement, and prints the deployed version. It is also a recovery path when
+a host's old self-update cannot reach the new repository layout. A normal
+start invocation may self-update instead, but verify it with the same
+--no-update --version check after it completes.
 
 ~~~bash
-for host_dir in $HOST_DIRS; do
-    host=$(basename "$host_dir")
-    case "$host" in
-        ex44) target=coding@ex44.jedarden.com ;;
-        lab) target=coding@lab.ardenone.com ;;
-        *) echo "missing target for $host" >&2; exit 1 ;;
-    esac
+TARGET_MAP=docs/release-rollout-targets.tsv
+./scripts/check-rollout-targets.sh --live
+while IFS=$'\t' read -r lineage target; do
+    [[ -n "$lineage" && "$lineage" != \#* && "$lineage" != lineage ]] || continue
     ssh "$target" 'set -eu
         tmp=$(mktemp "$HOME/start.sh.XXXXXX")
         trap '\''rm -f "$tmp"'\'' EXIT
@@ -127,12 +147,13 @@ for host_dir in $HOST_DIRS; do
         trap - EXIT
         bash -n "$HOME/start.sh"
         "$HOME/start.sh" --no-update --version
-    ' < "$host_dir/start.sh" | grep -Fx "start v$VERSION"
-done
+    ' < "hosts/$lineage/start.sh" | grep -Fx "start v$VERSION"
+done < <(awk -F $'\t' 'NF == 2 { print }' "$TARGET_MAP")
 ~~~
 
-Record the target and observed version for every host. Do not report the
-rollout complete if one target is unavailable or reports a different version.
+Record the lineage, target, and observed version for every map row. Do not
+report the rollout complete if one target is unavailable or reports a
+different version.
 The local start.sh.version and signed manifest checks do not substitute for
 this live inventory check.
 
@@ -146,20 +167,22 @@ distribution, and every-host rollout gates for the rollback release.
 
 ~~~bash
 ROLLBACK_VERSION=1.3.3
-for host_dir in $HOST_DIRS; do
+for host_dir in $LINEAGE_DIRS; do
     host=$(basename "$host_dir")
     ARTIFACT_SIGNING_KEY=/secure/path/bootstrap-artifacts-signing.pem ./scripts/start-sh-release.sh --host "$host" rollback "$KNOWN_GOOD_COMMIT" "$ROLLBACK_VERSION"
 done
 
 ./scripts/check-host-parity.sh --live
+./scripts/check-rollout-targets.sh --live
 # Stage only each host's six rollback release paths, then:
 ./scripts/check-host-parity.sh --staged
-for host_dir in $HOST_DIRS; do
+./scripts/check-rollout-targets.sh --staged
+for host_dir in $LINEAGE_DIRS; do
     host=$(basename "$host_dir")
     ./scripts/start-sh-release.sh --host "$host" --check
 done
 git commit -m "rollback(start.sh): v$ROLLBACK_VERSION"
-for host_dir in $HOST_DIRS; do
+for host_dir in $LINEAGE_DIRS; do
     host=$(basename "$host_dir")
     ./scripts/start-sh-release.sh --host "$host" publish
 done
@@ -182,6 +205,6 @@ tests/release-rollout-workflow-test.sh
 
 It models Forgejo and its GitHub/raw mirror with local bare repositories,
 checks both live and staged parity, validates signed version metadata, pushes
-and audits both lineages, installs each launcher through a fake SSH target,
-checks every deployed version, and repeats the full flow for a forward-version
-rollback.
+and audits both lineages, validates the reviewed target map, installs each
+launcher through every mapped fake SSH target, checks every deployed version,
+and repeats the full flow for a forward-version rollback.

@@ -49,6 +49,12 @@ assert_documented() {
         fail 'runbook omits forward-version rollback'
     grep -Fq 'KNOWN_GOOD_COMMIT' "$doc" ||
         fail 'runbook omits the known-good rollback commit'
+    grep -Fq 'docs/release-rollout-targets.tsv' "$doc" ||
+        fail 'runbook omits the reviewed rollout target map'
+    grep -Fq './scripts/check-rollout-targets.sh --live' "$doc" ||
+        fail 'runbook omits live rollout target validation'
+    grep -Fq './scripts/check-rollout-targets.sh --staged' "$doc" ||
+        fail 'runbook omits staged rollout target validation'
     grep -Fq 'tests/release-rollout-workflow-test.sh' "$doc" ||
         fail 'runbook omits its regression test'
     grep -Fq './docs/release-rollout.md' "$ROOT/README.md" ||
@@ -116,10 +122,11 @@ target=$1
 shift
 [[ $# -eq 1 ]] || { echo 'fake ssh expected one remote command' >&2; exit 2; }
 case "$target" in
-    ex44|lab) ;;
+    coding@ex44.jedarden.com) host=ex44 ;;
+    coding@lab.ardenone.com) host=lab ;;
     *) echo "unknown fake SSH target: $target" >&2; exit 2 ;;
 esac
-export HOME="$DEPLOY_ROOT/$target"
+export HOME="$DEPLOY_ROOT/$host"
 mkdir -p "$HOME"
 bash -c "$1"
 SH
@@ -127,10 +134,10 @@ SH
 }
 
 rollout_and_verify() {
-    local version=$1 host_dir host output
-    for host_dir in "$FIXTURE"/hosts/*; do
-        host=$(basename "$host_dir")
-        output=$(PATH="$TMP/bin:$PATH" DEPLOY_ROOT="$DEPLOYED" ssh "$host" 'set -eu
+    local version=$1 lineage target output
+    while IFS=$'\t' read -r lineage target; do
+        [[ -n "$lineage" && "$lineage" != \#* && "$lineage" != lineage ]] || continue
+        output=$(PATH="$TMP/bin:$PATH" DEPLOY_ROOT="$DEPLOYED" ssh "$target" 'set -eu
             tmp=$(mktemp "$HOME/start.sh.XXXXXX")
             cat > "$tmp"
             chmod 0755 "$tmp"
@@ -138,10 +145,10 @@ rollout_and_verify() {
             mv -f "$tmp" "$HOME/start.sh"
             bash -n "$HOME/start.sh"
             "$HOME/start.sh" --no-update --version
-        ' < "$host_dir/start.sh")
+        ' < "$FIXTURE/hosts/$lineage/start.sh")
         [[ "$output" == "start v$version" ]] ||
-            fail "$host deployed the wrong version: $output"
-    done
+            fail "$target deployed the wrong version: $output"
+    done < <(awk -F $'\t' 'NF == 2 && $1 != "lineage" && $1 !~ /^#/ { print }' "$FIXTURE/docs/release-rollout-targets.tsv")
     for host in ex44 lab; do
         output=$(HOME="$DEPLOYED/$host" "$DEPLOYED/$host/start.sh" --no-update --version)
         [[ "$output" == "start v$version" ]] ||
@@ -152,8 +159,10 @@ rollout_and_verify() {
 run_parity_and_checks() {
     local version=$1
     (cd "$FIXTURE" && scripts/check-host-parity.sh --live >/dev/null)
+    (cd "$FIXTURE" && scripts/check-rollout-targets.sh --live >/dev/null)
     git -C "$FIXTURE" add "hosts/ex44/start.sh" "hosts/ex44/bootstrap.sh" "hosts/ex44/start.sh.version" "hosts/ex44/artifact-manifest.txt" "hosts/ex44/artifact-manifest.sig" "hosts/ex44/bootstrap-$version.sh" "hosts/lab/start.sh" "hosts/lab/bootstrap.sh" "hosts/lab/start.sh.version" "hosts/lab/artifact-manifest.txt" "hosts/lab/artifact-manifest.sig" "hosts/lab/bootstrap-$version.sh"
     (cd "$FIXTURE" && scripts/check-host-parity.sh --staged >/dev/null)
+    (cd "$FIXTURE" && scripts/check-rollout-targets.sh --staged >/dev/null)
     for host in ex44 lab; do
         (cd "$FIXTURE" && scripts/start-sh-release.sh --host "$host" --check >/dev/null)
     done
@@ -181,24 +190,34 @@ publish_and_verify_distribution() {
 }
 
 assert_documented
-mkdir -p "$FIXTURE/scripts" "$FIXTURE/hosts/ex44" "$FIXTURE/hosts/lab" "$SIGNING_DIR"
+mkdir -p "$FIXTURE/docs" "$FIXTURE/scripts" "$FIXTURE/hosts/ex44" "$FIXTURE/hosts/lab" "$SIGNING_DIR"
 openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out "$PRIVATE_KEY" 2>/dev/null
 openssl pkey -in "$PRIVATE_KEY" -pubout -out "$PUBLIC_KEY" 2>/dev/null
 
 cp -p "$ROOT/README.md" "$FIXTURE/README.md"
-cp -p "$ROOT/scripts/check-host-parity.sh" "$ROOT/scripts/check-secret-leakage.sh" "$ROOT/scripts/start-sh-release.sh" "$FIXTURE/scripts/"
+cp -p "$ROOT/docs/release-rollout-targets.tsv" "$FIXTURE/docs/"
+cp -p "$ROOT/scripts/check-host-parity.sh" "$ROOT/scripts/check-rollout-targets.sh" "$ROOT/scripts/check-secret-leakage.sh" "$ROOT/scripts/start-sh-release.sh" "$FIXTURE/scripts/"
 prepare_lineage ex44
 prepare_lineage lab
 printf '%s\n' '| [hosts/lab/](./hosts/lab/) | Disposable second release lineage |' >> "$FIXTURE/README.md"
+printf '%s\n' \
+    '# fixture target map' \
+    $'lineage\ttarget' \
+    $'ex44\tcoding@ex44.jedarden.com' \
+    $'lab\tcoding@lab.ardenone.com' > "$FIXTURE/docs/release-rollout-targets.tsv"
 write_manifest ex44
 write_manifest lab
+
+(cd "$FIXTURE" && scripts/check-rollout-targets.sh --live >/dev/null)
 
 git -C "$FIXTURE" init -q -b main
 git -C "$FIXTURE" config user.name rollout-test
 git -C "$FIXTURE" config user.email rollout-test@example.invalid
-git -C "$FIXTURE" add README.md scripts hosts/ex44 hosts/lab
+git -C "$FIXTURE" add README.md docs scripts hosts/ex44 hosts/lab
 git -C "$FIXTURE" commit -q --no-verify -m base
 BASE_COMMIT=$(git -C "$FIXTURE" rev-parse HEAD)
+
+(cd "$FIXTURE" && scripts/check-rollout-targets.sh --staged >/dev/null)
 
 git init --bare -q "$FORGEJO_BARE"
 git init --bare -q "$GITHUB_BARE"

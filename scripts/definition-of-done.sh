@@ -17,12 +17,14 @@ case "${1:-}" in
         bash -n "$ROOT/tests/ssh-key-rotation-test.sh"
         bash -n "$ROOT/tests/artifact-signing-provisioning-test.sh"
         bash -n "$ROOT/tests/host-lineage-onboarding-test.sh"
+        bash -n "$ROOT/tests/rollout-target-map-test.sh"
         bash -n "$ROOT/tests/start-sh-interface-test.sh"
         bash -n "$ROOT/tests/start-sh-runtime-test.sh"
         bash -n "$ROOT/tests/start-sh-release-test.sh"
         bash -n "$ROOT/tests/signed-release-lifecycle-test.sh"
         bash -n "$ROOT/tests/release-rollout-workflow-test.sh"
         bash -n "$ROOT/scripts/check-host-parity.sh"
+        bash -n "$ROOT/scripts/check-rollout-targets.sh"
         bash -n "$ROOT/tests/host-artifact-parity-test.sh"
         bash -n "$ROOT/tests/artifact-secret-leakage-test.sh"
         bash -n "$ROOT/scripts/check-secret-leakage.sh"
@@ -49,6 +51,7 @@ case "${1:-}" in
         "$ROOT/tests/ssh-key-rotation-test.sh"
         "$ROOT/tests/artifact-signing-provisioning-test.sh"
         "$ROOT/tests/host-lineage-onboarding-test.sh"
+        "$ROOT/tests/rollout-target-map-test.sh"
         "$ROOT/tests/start-sh-interface-test.sh"
         "$ROOT/tests/start-sh-runtime-test.sh"
         "$ROOT/tests/start-sh-release-test.sh"
@@ -70,6 +73,7 @@ case "${1:-}" in
         "$ROOT/tests/hook-activation-test.sh"
         "$ROOT/hosts/ex44/sync-start-sh.sh" --check
         "$ROOT/scripts/start-sh-release.sh" --check
+        "$ROOT/scripts/check-rollout-targets.sh" --live
         "$ROOT/tests/hetzner-robot-test.sh"
         "$ROOT/ansible/validate.sh"
         ;;

@@ -1,0 +1,6 @@
+# Reviewed SSH rollout target map. One row per machine consuming a lineage.
+# Ownership: bootstrap release operators. Review every target change with the
+# corresponding host-access change; this file contains destinations only.
+lineage	target
+ex44	coding@ex44.jedarden.com
+ex44	coding@lab.ardenone.com

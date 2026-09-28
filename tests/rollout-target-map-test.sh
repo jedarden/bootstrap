@@ -73,4 +73,8 @@ write_map $'ex44\tcoding@not a host'
 expect_failure 'unknown or invalid SSH target' \
     "$FIXTURE/scripts/check-rollout-targets.sh" --live
 
+write_map $'ex44\tcoding@ex44.jedarden.com\t'
+expect_failure 'not exactly two tab-separated fields' \
+    "$FIXTURE/scripts/check-rollout-targets.sh" --live
+
 echo 'rollout target map tests passed.'

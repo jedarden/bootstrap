@@ -101,8 +101,13 @@ while IFS= read -r line || [[ -n "$line" ]]; do
         continue
     fi
 
-    IFS=$'\t' read -r lineage target extra <<< "$line"
-    if [[ -z "${lineage:-}" || -z "${target:-}" || -n "${extra:-}" ]]; then
+    if [[ "$line" != *$'\t'* || "$line" == *$'\t'*$'\t'* ]]; then
+        errors+=("line $line_number is not exactly two tab-separated fields")
+        continue
+    fi
+    lineage=${line%%$'\t'*}
+    target=${line#*$'\t'}
+    if [[ -z "$lineage" || -z "$target" ]]; then
         errors+=("line $line_number is not exactly two tab-separated fields")
         continue
     fi

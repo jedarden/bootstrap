@@ -11,7 +11,7 @@ TMP=$(mktemp -d "${TMPDIR:-/tmp}/start-sh-runtime-test.XXXXXX")
 TEST_UID=$(id -u)
 CASE_TMUX_TMPDIR=""
 
-trap 'if [[ -n "${CASE_TMUX_TMPDIR:-}" ]]; then TMUX_TMPDIR="$CASE_TMUX_TMPDIR" tmux kill-server >/dev/null 2>&1 || true; fi; rm -rf "$TMP"' EXIT
+trap 'if [[ -n "${CASE_TMUX_TMPDIR:-}" ]]; then env -u TMUX -u TMUX_PANE TMUX_TMPDIR="$CASE_TMUX_TMPDIR" tmux kill-server >/dev/null 2>&1 || true; fi; rm -rf "$TMP"' EXIT
 
 fail() {
     echo "FAIL: $*" >&2
@@ -87,6 +87,11 @@ setup_case() {
     chmod +x "$CASE_BIN/agent"
     ln -s agent "$CASE_BIN/claude"
     ln -s agent "$CASE_BIN/codex"
+    # Match the production install location as well as the test PATH. tmux
+    # panes may start with the server's environment rather than this client's
+    # PATH; either way they must resolve these doubles, never host agents.
+    ln -s "$CASE_BIN/claude" "$CASE_HOME/.local/bin/claude"
+    ln -s "$CASE_BIN/codex" "$CASE_HOME/.local/bin/codex"
 
     printf '%s\n' \
         '#!/usr/bin/env bash' \
@@ -108,7 +113,10 @@ setup_case() {
 }
 
 tmux_case_command() {
-    TMUX_TMPDIR="$CASE_TMUX_TMPDIR" tmux "$@"
+    # The test can run inside the operator's tmux session. TMUX takes
+    # precedence over TMUX_TMPDIR, so clear it for every command or the
+    # assertions and teardown can inspect or kill the operator's server.
+    env -u TMUX -u TMUX_PANE TMUX_TMPDIR="$CASE_TMUX_TMPDIR" tmux "$@"
 }
 
 stop_case_server() {
@@ -132,7 +140,7 @@ run_tmux_case() {
     (
         export HOME="$CASE_HOME" PATH="$PATH_VALUE" TMUX_TMPDIR="$CASE_TMUX_TMPDIR"
         export TERM=xterm-256color
-        unset TMUX HERDR_ENV START_SH_AGENT
+        unset TMUX TMUX_PANE HERDR_ENV START_SH_AGENT
         hash -r
         # tmux attach-session requires a controlling terminal. `script`
         # supplies one without coupling the test to the caller's terminal.
@@ -210,7 +218,7 @@ run_unavailable_case() {
     local output status=0
     if output=$(
         export HOME="$CASE_HOME" PATH="$PATH_VALUE" TMUX_TMPDIR="$CASE_TMUX_TMPDIR"
-        unset TMUX HERDR_ENV START_SH_AGENT
+        unset TMUX TMUX_PANE HERDR_ENV START_SH_AGENT
         hash -r
         start "$agent" --no-update
     ) 2>&1; then

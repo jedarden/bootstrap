@@ -1109,3 +1109,47 @@ change and rejects authentication with the retired private key.
   after retirement.
 - The acceptance test covers the continuity and revocation properties that
   static manifest-digest checks cannot prove.
+
+## ADR-18: 2026-09-28 — Recover an emergency artifact-signing-key compromise without overlap
+
+### Context
+
+Planned signing-key rotation uses an overlap release so already-deployed
+launchers can migrate from the old trust anchor to the new one. That safety
+property is unsafe after a signing key is lost or compromised: retaining the
+old key would allow an attacker with the key to produce an apparently valid
+release during the incident. A launcher that still embeds the old key also
+cannot authenticate a new-key manifest by itself.
+
+### Decision
+
+Emergency recovery halts release and rollout, preserves the incident evidence,
+revokes or quarantines the old key, and replaces the pinned trust anchor with
+one new key in a forward release. The recovery release has no trusted-key
+overlap and is signed only by the replacement key. Hosts still carrying the
+old launcher are migrated through an independently trusted out-of-band
+administrative path; hosts that received a post-compromise artifact are
+isolated and rebuilt or re-bootstrapped from the replacement-key release.
+
+Historical immutable archives remain in Git and their digests remain in the
+new signed manifest for audit. They are not trusted merely because an old-key
+signature verifies. An older payload can be used only when its bytes are
+independently confirmed against a pre-compromise record and only as a
+controlled step toward the replacement-anchor launcher.
+
+The runbook is
+`docs/security/artifact-signing-compromise-recovery.md`. The acceptance test
+creates an old-key candidate without publishing it, exercises both verifier
+copies, replaces the anchor without overlap, publishes a new-key release
+through a disposable Forgejo/GitHub/raw mirror, proves old deployed launchers
+reject it until out-of-band replacement, and confirms historical archive bytes
+are retained.
+
+### Consequences
+
+- Emergency recovery is visibly distinct from planned overlap rotation and
+  does not depend on a migration grace period.
+- Existing hosts cannot be migrated by publication alone; the operator must
+  account for every deployed host and perform the trusted out-of-band step.
+- The repository keeps immutable historical evidence while new-anchor
+  verification rejects old-key manifests after revocation.

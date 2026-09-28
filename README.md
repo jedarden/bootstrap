@@ -130,6 +130,7 @@ Run the local self-update regression suite without contacting the network:
 ```bash
 tests/start-sh-self-update-test.sh
 tests/artifact-authentication-test.sh
+tests/artifact-signing-compromise-recovery-test.sh
 tests/signed-release-lifecycle-test.sh
 tests/host-lineage-onboarding-test.sh
 tests/rollout-target-map-test.sh
@@ -250,6 +251,11 @@ leaves an installed launcher in place. If the old key is compromised before
 overlap completes, do not publish a one-step replacement: use an
 out-of-band trusted host/bootstrap path to install a launcher carrying the
 new anchor.
+
+For a lost or compromised signing key, halt rollout and follow the separate
+[emergency signing-key compromise recovery procedure](./docs/security/artifact-signing-compromise-recovery.md).
+Emergency recovery revokes the old trust anchor immediately; it is not planned
+key rotation and does not use an overlap release.
 
 The check requires the release files, including the versioned archive and
 signed manifest, to be committed, confirms local `HEAD`

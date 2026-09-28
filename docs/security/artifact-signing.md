@@ -229,5 +229,6 @@ The private key should remain in the protected signing directory after the
 first release, with an offline recovery copy if the operating policy calls
 for one. Future releases use the same path-only `ARTIFACT_SIGNING_KEY`
 contract. If the key is lost or suspected compromised, stop signing and use
-the documented rotation or out-of-band recovery procedure; do not replace
-the only trust anchor in a single release.
+the documented [emergency compromise recovery procedure](./artifact-signing-compromise-recovery.md);
+do not use planned overlap rotation or replace the only trust anchor without
+the out-of-band host recovery described there.

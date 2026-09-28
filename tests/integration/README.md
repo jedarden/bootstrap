@@ -53,3 +53,31 @@ usable; set `BOOTSTRAP_TEST_REQUIRE_DOCKER=true` to make that environment a
 failure. Use `--keep` while diagnosing a failed disposable host.
 `BOOTSTRAP_TEST_DEBIAN_IMAGE` and `BOOTSTRAP_TEST_UBUNTU_IMAGE` override the
 two images independently.
+
+## Clean-host disaster recovery
+
+Run the single-host rebuild drill with:
+
+    tests/integration/disaster-recovery-test.sh
+
+This drill authenticates the published EX44 archive with the pinned signing
+key, manifest signature, SHA-256 entries, and current/archive equality before
+creating a host. It then creates disposable SOPS ciphertext for both
+bootstrap secrets, removes the primary age identity, and uses only the
+mode-0600 recovery identity through `sops exec-env`. The target receives no
+SOPS binary, age identity, or ciphertext file.
+
+The clean Debian 12 host is seeded with a representative surviving B2/restic
+snapshot. The verified bootstrap restores `/home` and `/var/lib/tailscale`,
+then the drill checks the restored marker, user ownership, Tailscale/SSH
+access, the unprivileged launcher, private restic configuration, and the
+read-only bootstrap verification summary. A simulated reboot clears volatile
+service state and the same access, launcher, restored-data, and verification
+checks run again.
+
+The test uses the same `tests/integration/host-fixture.sh` doubles as the
+matrix test, so it never contacts a real B2 account or writes operator
+credentials to a host. Set `BOOTSTRAP_RECOVERY_TEST_REQUIRE_DOCKER=true` (and
+`BOOTSTRAP_RECOVERY_TEST_REQUIRE_TOOLS=true`) to make missing Docker or
+operator SOPS/age tools a failure instead of a skip. Override the image with
+`BOOTSTRAP_RECOVERY_TEST_IMAGE`; it must remain a Debian 12 amd64 image.

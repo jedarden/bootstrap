@@ -462,6 +462,21 @@ host is ready for those paths to be replaced. The restic encryption password
 and B2 application key remain in `/etc/restic/b2.env`; never put either value
 in shell history, logs, or this procedure.
 
+### Clean-host disaster recovery
+
+For a full rebuild after host loss, follow the operator-side recovery sequence
+in [`docs/secrets/sops.md`](../../docs/secrets/sops.md#clean-host-disaster-recovery).
+It authenticates the signed immutable bootstrap before execution, uses the
+offline SOPS recovery identity without copying it to the host, restores the
+surviving B2/restic snapshot, and requires access, launcher, and post-reboot
+verification to pass. The disposable end-to-end proof is:
+
+```bash
+BOOTSTRAP_RECOVERY_TEST_REQUIRE_DOCKER=true \
+BOOTSTRAP_RECOVERY_TEST_REQUIRE_TOOLS=true \
+tests/integration/disaster-recovery-test.sh
+```
+
 ## Security Features
 
 ### Network

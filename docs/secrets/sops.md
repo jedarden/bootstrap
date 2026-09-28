@@ -498,3 +498,73 @@ plaintext files under `secrets/ansible/`. This check must pass before a
 change is pushed. A successful `sops filestatus`
 proves the file has SOPS metadata; it does not prove that every intended
 recipient can still decrypt it.
+
+## Clean-host disaster recovery
+
+Use this order when the host must be rebuilt from a supported clean Debian 12
+or Ubuntu 24.04 amd64 installation:
+
+1. Run `scripts/bootstrap-preflight.sh` from an interactive root-capable
+   terminal. Keep the rescue-network SSH path available until Tailscale has
+   reconnected.
+2. Download the immutable `bootstrap-<version>.sh`, manifest, detached
+   signature, pinned public key, and SSH public keys. Follow the
+   [artifact-authentication runbook](../../README.md#artifact-authentication)
+   and do not execute an unauthenticated stream. Check the signing-key
+   fingerprint, manifest signature, archive digest, and the equality of the
+   downloaded `bootstrap.sh` and versioned archive before running anything.
+3. Make the offline age recovery identity available to the operator with mode
+   `0600`. Keep it on the operator side; it must not be copied to the clean
+   host. With the encrypted bootstrap dotenv available to the operator, use
+   the recovery identity as the only SOPS identity:
+
+   ```bash
+   export SOPS_AGE_KEY_FILE=/secure/offline/age-recovery.txt
+   sops exec-env secrets/bootstrap/ex44.sops.env \
+     'exec env -u SOPS_AGE_KEY -u SOPS_AGE_KEY_FILE -u SOPS_AGE_RECIPIENTS bash /root/bootstrap-1.3.1.sh'
+   ```
+
+   Replace the version and path with the authenticated files for the release
+   being recovered. `sops exec-env` supplies only
+   `BOOTSTRAP_B2_APPLICATION_KEY` and `BOOTSTRAP_RESTIC_PASSWORD` to this one
+   bootstrap process; it does not put plaintext secrets or age metadata in
+   the downloaded artifact.
+4. Enter the normal bootstrap values. Use the original B2 bucket, path prefix,
+   and account/key ID so the derived restic repository points at the surviving
+   B2 data. When the bootstrap reports an existing snapshot, confirm the
+   restore. It restores `/home` and `/var/lib/tailscale` and repairs configured
+   user ownership. If the restore prompt was intentionally skipped, use the
+   maintenance-window command after bootstrap:
+
+   ```bash
+   sudo /usr/local/bin/restore-home latest
+   ```
+
+5. From the recovered Tailscale session, verify the host and restored access:
+
+   ```bash
+   sudo ./bootstrap-1.3.1.sh --verify
+   tailscale status
+   sudo /usr/local/bin/list-backups
+   sudo -iu coding start --no-update --agent claude
+   ```
+
+   Check representative restored files as their owning user. Do not print
+   `/etc/restic/b2.env`; its mode must remain `0600`.
+6. Reboot, reconnect through Tailscale, and repeat `--verify`, the launcher
+   invocation, `list-backups`, and a read check for the restored marker. The
+   recovery is complete only when those checks pass after the reboot.
+
+The disposable proof for this complete sequence is:
+
+```bash
+BOOTSTRAP_RECOVERY_TEST_REQUIRE_DOCKER=true \
+BOOTSTRAP_RECOVERY_TEST_REQUIRE_TOOLS=true \
+tests/integration/disaster-recovery-test.sh
+```
+
+It authenticates the signed artifact before creating a disposable Debian 12
+host, uses a recovery-only SOPS decryption, restores a seeded restic snapshot,
+checks access and launcher operation, and repeats the checks across the
+simulated reboot boundary. No real B2 account, ciphertext, or private identity
+is used by the test.

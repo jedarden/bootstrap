@@ -10,6 +10,7 @@ case "${1:-}" in
         bash -n "$ROOT/hosts/ex44/start.sh"
         bash -n "$ROOT/tests/integration/host-fixture.sh"
         bash -n "$ROOT/tests/integration/bootstrap-test.sh"
+        bash -n "$ROOT/tests/integration/disaster-recovery-test.sh"
         bash -n "$ROOT/tests/start-sh-self-update-test.sh"
         bash -n "$ROOT/tests/artifact-authentication-test.sh"
         bash -n "$ROOT/tests/artifact-key-rotation-test.sh"
@@ -49,6 +50,7 @@ case "${1:-}" in
         "$ROOT/tests/start-sh-runtime-test.sh"
         "$ROOT/tests/start-sh-release-test.sh"
         "$ROOT/tests/signed-release-lifecycle-test.sh"
+        "$ROOT/tests/integration/disaster-recovery-test.sh"
         "$ROOT/tests/host-artifact-parity-test.sh"
         "$ROOT/tests/artifact-secret-leakage-test.sh"
         "$ROOT/scripts/check-secret-leakage.sh" --tracked --artifacts

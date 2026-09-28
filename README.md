@@ -133,6 +133,7 @@ tests/artifact-authentication-test.sh
 tests/signed-release-lifecycle-test.sh
 tests/host-lineage-onboarding-test.sh
 tests/rollout-target-map-test.sh
+tests/sync-start-sh-test.sh
 tests/release-rollout-workflow-test.sh
 ```
 
@@ -146,6 +147,9 @@ The host-lineage onboarding test creates a divergent `hosts/lab/` fixture,
 generates its first signed release with independent public inputs, runs live
 and staged parity checks, and confirms private keys stay outside Git and
 generated artifacts.
+The sync-start-sh regression test exercises standalone launcher, repository
+URL, and trust-anchor propagation, rejected inputs, and check-mode behavior
+without modifying the fixture.
 The multi-host rollout test models the Forgejo mirror and raw HTTPS
 distribution locally, validates both host lineages from the staged and live
 views, deploys and verifies every target, and repeats the documented rollback

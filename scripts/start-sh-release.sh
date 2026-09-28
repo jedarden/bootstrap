@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# Prepare, validate, and publish a hosts/ex44/start.sh release.
+# Prepare, validate, and publish a host-lineage start.sh release.
 #
 # The standalone start.sh is the source of truth. bootstrap.sh contains a
 # generated copy, and start.sh.version is the version advertised to deployed
@@ -10,32 +10,12 @@ set -Eeuo pipefail
 # committing or publishing.
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-HOST_DIR="$ROOT/hosts/ex44"
-START_SH="$HOST_DIR/start.sh"
-BOOTSTRAP_SH="$HOST_DIR/bootstrap.sh"
-VERSION_FILE="$HOST_DIR/start.sh.version"
-SYNC_SH="$HOST_DIR/sync-start-sh.sh"
-MANIFEST_FILE="$HOST_DIR/artifact-manifest.txt"
-SIGNATURE_FILE="$HOST_DIR/artifact-manifest.sig"
-SIGNING_PUBLIC_KEY="$HOST_DIR/keys/bootstrap-artifacts-signing.pub"
-START_REL="hosts/ex44/start.sh"
+HOST_NAME="${BOOTSTRAP_HOST:-ex44}"
 FORGEJO_REMOTE="${FORGEJO_REMOTE:-origin}"
 GITHUB_REPO_URL="${GITHUB_REPO_URL:-https://github.com/jedarden/bootstrap.git}"
-GITHUB_RAW_ROOT="${GITHUB_RAW_ROOT:-https://raw.githubusercontent.com/jedarden/bootstrap/main/hosts/ex44}"
 DISTRIBUTION_TIMEOUT_SECONDS="${DISTRIBUTION_TIMEOUT_SECONDS:-120}"
 DISTRIBUTION_POLL_SECONDS="${DISTRIBUTION_POLL_SECONDS:-2}"
 DISTRIBUTION_TMP=
-
-readonly DISTRIBUTION_ARTIFACTS=(
-    'hosts/ex44/bootstrap.sh|bootstrap.sh'
-    'hosts/ex44/start.sh|start.sh'
-    'hosts/ex44/start.sh.version|start.sh.version'
-    'hosts/ex44/artifact-manifest.txt|artifact-manifest.txt'
-    'hosts/ex44/artifact-manifest.sig|artifact-manifest.sig'
-    'hosts/ex44/keys/jedarden.pub|keys/jedarden.pub'
-    'hosts/ex44/keys/jeda-mbp.pub|keys/jeda-mbp.pub'
-    'hosts/ex44/keys/bootstrap-artifacts-signing.pub|keys/bootstrap-artifacts-signing.pub'
-)
 
 die() {
     echo "ERROR: $*" >&2
@@ -45,13 +25,13 @@ die() {
 usage() {
     cat <<'USAGE'
 Usage:
-  scripts/start-sh-release.sh release VERSION
-  scripts/start-sh-release.sh rollback GIT-REF VERSION
-  scripts/start-sh-release.sh manifest VERSION
-  scripts/start-sh-release.sh rotation-check OLD-KEY-ID NEW-KEY-ID
-  scripts/start-sh-release.sh --check
-  scripts/start-sh-release.sh distribution-check
-  scripts/start-sh-release.sh publish
+  scripts/start-sh-release.sh [--host HOST] release VERSION
+  scripts/start-sh-release.sh [--host HOST] rollback GIT-REF VERSION
+  scripts/start-sh-release.sh [--host HOST] manifest VERSION
+  scripts/start-sh-release.sh [--host HOST] rotation-check OLD-KEY-ID NEW-KEY-ID
+  scripts/start-sh-release.sh [--host HOST] --check
+  scripts/start-sh-release.sh [--host HOST] distribution-check
+  scripts/start-sh-release.sh [--host HOST] publish
 
 Commands:
   release VERSION       Set the next start.sh version, regenerate the
@@ -80,7 +60,63 @@ payload came from an older Git commit; deployed launchers only move forward.
 
 The host artifact checker validates every host directory independently, so
 intentional host-specific splits do not require a special environment flag.
+HOST defaults to ex44. Use --host for a divergent directory under hosts/.
 USAGE
+}
+
+configure_host() {
+    [[ "$HOST_NAME" =~ ^[a-z0-9][a-z0-9-]*$ ]] ||
+        die "invalid host '$HOST_NAME' (expected a lowercase directory name)"
+
+    HOST_REL="hosts/$HOST_NAME"
+    HOST_DIR="$ROOT/$HOST_REL"
+    [[ -d "$HOST_DIR" ]] || die "host directory does not exist: $HOST_REL"
+    START_SH="$HOST_DIR/start.sh"
+    BOOTSTRAP_SH="$HOST_DIR/bootstrap.sh"
+    VERSION_FILE="$HOST_DIR/start.sh.version"
+    SYNC_SH="$HOST_DIR/sync-start-sh.sh"
+    MANIFEST_FILE="$HOST_DIR/artifact-manifest.txt"
+    SIGNATURE_FILE="$HOST_DIR/artifact-manifest.sig"
+    SIGNING_PUBLIC_KEY="$HOST_DIR/keys/bootstrap-artifacts-signing.pub"
+    START_REL="$HOST_REL/start.sh"
+    GITHUB_RAW_ROOT="${GITHUB_RAW_ROOT:-https://raw.githubusercontent.com/jedarden/bootstrap/main/$HOST_REL}"
+    DISTRIBUTION_ARTIFACTS=(
+        "$HOST_REL/bootstrap.sh|bootstrap.sh"
+        "$HOST_REL/start.sh|start.sh"
+        "$HOST_REL/start.sh.version|start.sh.version"
+        "$HOST_REL/artifact-manifest.txt|artifact-manifest.txt"
+        "$HOST_REL/artifact-manifest.sig|artifact-manifest.sig"
+        "$HOST_REL/keys/jedarden.pub|keys/jedarden.pub"
+        "$HOST_REL/keys/jeda-mbp.pub|keys/jeda-mbp.pub"
+        "$HOST_REL/keys/bootstrap-artifacts-signing.pub|keys/bootstrap-artifacts-signing.pub"
+    )
+}
+
+parse_options() {
+    while (($# > 0)); do
+        case "$1" in
+            --host)
+                [[ $# -ge 2 ]] || { usage >&2; exit 2; }
+                HOST_NAME=$2
+                shift 2
+                ;;
+            --host=*)
+                HOST_NAME=${1#--host=}
+                shift
+                ;;
+            --help|-h)
+                usage
+                exit 0
+                ;;
+            *)
+                break
+                ;;
+        esac
+    done
+
+    configure_host
+    set -- "$@"
+    RELEASE_ARGS=("$@")
 }
 
 require_version() {
@@ -232,7 +268,7 @@ check_immutable_archives() {
         path="$ROOT/$tracked"
         [[ -f "$path" ]] ||
             die "immutable bootstrap archive is missing: $tracked (historical archives must not be deleted)"
-    done < <(git -C "$ROOT" ls-files 'hosts/ex44/bootstrap-*.sh' 2>/dev/null || true)
+    done < <(git -C "$ROOT" ls-files "$HOST_REL/bootstrap-*.sh" 2>/dev/null || true)
 }
 
 check_rotation_release() {
@@ -401,7 +437,7 @@ distribution_tmp_file() {
 
 raw_artifacts_match() {
     local tmp=$1 archive_filename=$2 spec filename
-    local -a artifacts=("${DISTRIBUTION_ARTIFACTS[@]}" "hosts/ex44/$archive_filename|$archive_filename")
+    local -a artifacts=("${DISTRIBUTION_ARTIFACTS[@]}" "$HOST_REL/$archive_filename|$archive_filename")
     for spec in "${artifacts[@]}"; do
         filename=${spec#*|}
         mkdir -p "$(dirname "$(distribution_tmp_file actual "$filename")")"
@@ -420,9 +456,9 @@ verify_distribution() {
     expected_version=$(read_advertised_version)
     expected_archive_filename="bootstrap-$expected_version.sh"
     git -C "$ROOT" diff-index --quiet HEAD -- \
-        hosts/ex44/bootstrap.sh hosts/ex44/start.sh hosts/ex44/start.sh.version \
-        "hosts/ex44/$expected_archive_filename" hosts/ex44/artifact-manifest.txt \
-        hosts/ex44/artifact-manifest.sig ||
+        "$HOST_REL/bootstrap.sh" "$HOST_REL/start.sh" "$HOST_REL/start.sh.version" \
+        "$HOST_REL/$expected_archive_filename" "$HOST_REL/artifact-manifest.txt" \
+        "$HOST_REL/artifact-manifest.sig" ||
         die "release files have uncommitted changes; commit them before distribution-check"
 
     expected_commit=$(git -C "$ROOT" rev-parse HEAD) ||
@@ -438,7 +474,7 @@ verify_distribution() {
         die "DISTRIBUTION_POLL_SECONDS must be a non-negative integer"
 
     DISTRIBUTION_TMP=$(mktemp -d "${TMPDIR:-/tmp}/start-sh-distribution.XXXXXX")
-    artifacts=("${DISTRIBUTION_ARTIFACTS[@]}" "hosts/ex44/$expected_archive_filename|$expected_archive_filename")
+    artifacts=("${DISTRIBUTION_ARTIFACTS[@]}" "$HOST_REL/$expected_archive_filename|$expected_archive_filename")
     for spec in "${artifacts[@]}"; do
         path=${spec%%|*}
         filename=${spec#*|}
@@ -575,11 +611,11 @@ publish_release() {
     check_release
     version=$(read_advertised_version)
     archive_filename="bootstrap-$version.sh"
-    git -C "$ROOT" ls-files --error-unmatch "hosts/ex44/$archive_filename" >/dev/null 2>&1 ||
-        die "release archive is not tracked: hosts/ex44/$archive_filename"
-    git -C "$ROOT" diff-index --quiet HEAD -- "$START_REL" hosts/ex44/bootstrap.sh hosts/ex44/start.sh.version \
-        "hosts/ex44/$archive_filename" hosts/ex44/artifact-manifest.txt \
-        hosts/ex44/artifact-manifest.sig ||
+    git -C "$ROOT" ls-files --error-unmatch "$HOST_REL/$archive_filename" >/dev/null 2>&1 ||
+        die "release archive is not tracked: $HOST_REL/$archive_filename"
+    git -C "$ROOT" diff-index --quiet HEAD -- "$START_REL" "$HOST_REL/bootstrap.sh" "$HOST_REL/start.sh.version" \
+        "$HOST_REL/$archive_filename" "$HOST_REL/artifact-manifest.txt" \
+        "$HOST_REL/artifact-manifest.sig" ||
         die "release files have uncommitted changes; commit them before publishing"
     git -C "$ROOT" push origin main
     [[ -z "$(git -C "$ROOT" rev-list origin/main..HEAD)" ]] ||
@@ -587,6 +623,9 @@ publish_release() {
     verify_distribution
     echo "Published and verified main through the Forgejo GitHub mirror."
 }
+
+parse_options "$@"
+set -- "${RELEASE_ARGS[@]}"
 
 case "${1:-}" in
     release)

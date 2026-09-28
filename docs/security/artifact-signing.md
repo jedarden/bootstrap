@@ -13,14 +13,60 @@ artifacts. The release helper receives only a filesystem path through
 not put the PEM value in an environment variable, a command argument, a log,
 or a commit.
 
+## New divergent host lineage
+
+Use this procedure when a host needs its own keys, backup target, hardening, or
+other release content. It starts from the current release but gives the new
+directory its own repository URL, trust anchor, SSH inputs, signed manifest,
+and immutable archive. Run it from a clean `main` checkout, and choose a
+lowercase host directory name that does not already exist.
+
+### 0. Copy the current release and link the host
+
+The copy includes the current archive so the new lineage has a verified
+rollback/bootstrap starting point. Do not copy a private signing or SSH key;
+the source directory contains public inputs only.
+
+```bash
+repo=/path/to/bootstrap
+source_host=ex44
+host=lab
+source_dir="$repo/hosts/$source_host"
+host_dir="$repo/hosts/$host"
+test ! -e "$host_dir"
+current_version=$(tr -d '\r\n' < "$source_dir/start.sh.version")
+mkdir -p "$host_dir/keys"
+cp -p "$source_dir/bootstrap.sh" "$source_dir/start.sh" \
+  "$source_dir/start.sh.version" "$source_dir/sync-start-sh.sh" "$host_dir/"
+cp -p "$source_dir"/bootstrap-*.sh "$host_dir/"
+cp -p "$source_dir/keys/jedarden.pub" "$source_dir/keys/jeda-mbp.pub" \
+  "$host_dir/keys/"
+```
+
+Change the canonical launcher's raw-artifact URL to the new directory. Do not
+hand-edit `bootstrap.sh`; the sync script propagates the canonical `REPO_URL`,
+trust-anchor block, and embedded launcher together:
+
+```bash
+sed -i "s#/hosts/$source_host\"#/hosts/$host\"#" "$host_dir/start.sh"
+(cd "$host_dir" && ./sync-start-sh.sh)
+(cd "$host_dir" && ./sync-start-sh.sh --check)
+```
+
+Add a row for the new directory to the root `README.md` before running the
+release helper. The parity gate requires every immediate `hosts/` directory
+to have a real README link:
+
+```markdown
+| [hosts/lab/](./hosts/lab/) | Host-specific lab release lineage |
+```
+
 ## 1. Generate and store the signing key
 
 Perform this on the operator workstation or signing host. Use a dedicated
 directory with an offline backup policy appropriate for the release key.
 
 ```bash
-repo=/path/to/bootstrap
-host=ex44
 key_id=bootstrap-rsa-2026-09
 key_dir=/secure/bootstrap-signing/$key_id
 private_key=$key_dir/private.pem
@@ -104,6 +150,26 @@ its embedded launcher from the canonical file:
 The sync check is important: a host must receive the same initial trust anchor
 when it runs `bootstrap.sh` and when its installed launcher self-updates.
 
+Install the new host's SSH public inputs from the approved key-management
+location. Keep the corresponding private keys outside the repository; the
+two filenames are the complete input slots consumed by the bootstrap:
+
+```bash
+install -m 0644 /secure/ssh/$host/jedarden.pub \
+  "$repo/hosts/$host/keys/jedarden.pub"
+install -m 0644 /secure/ssh/$host/jeda-mbp.pub \
+  "$repo/hosts/$host/keys/jeda-mbp.pub"
+```
+
+Before the first release, remove the copied manifest and signature. They were
+signed by the source lineage's trust anchor and must not be reused after the
+new anchor or SSH inputs change:
+
+```bash
+rm "$repo/hosts/$host/artifact-manifest.txt" \
+  "$repo/hosts/$host/artifact-manifest.sig"
+```
+
 ## 4. Create the first signed release
 
 Choose a release version greater than the current version. The release helper
@@ -115,29 +181,49 @@ next_version=1.3.2
 (
   cd "$repo"
   ARTIFACT_SIGNING_KEY="$private_key" \
-    ./scripts/start-sh-release.sh release "$next_version"
-  ./scripts/start-sh-release.sh --check
+    ./scripts/start-sh-release.sh --host "$host" release "$next_version"
+  ./scripts/start-sh-release.sh --host "$host" --check
   ./scripts/check-secret-leakage.sh --tracked --artifacts
 )
 ```
 
 Review the generated bootstrap copy, immutable archive, manifest, signature,
 and pinned public key. Verify the signature with the installed public key,
-then stage only the release files:
+then run both parity views and stage only the release files plus the README
+link and public inputs:
 
 ```bash
 git -C "$repo" diff --check
-git -C "$repo" add \
+(
+  cd "$repo"
+  ./scripts/check-host-parity.sh --live
+)
+git -C "$repo" add README.md \
   "hosts/$host/start.sh" \
   "hosts/$host/bootstrap.sh" \
   "hosts/$host/start.sh.version" \
+  "hosts/$host/sync-start-sh.sh" \
   "hosts/$host/artifact-manifest.txt" \
   "hosts/$host/artifact-manifest.sig" \
-  "hosts/$host/bootstrap-$next_version.sh" \
+  "hosts/$host/keys/jedarden.pub" \
+  "hosts/$host/keys/jeda-mbp.pub" \
   "hosts/$host/keys/bootstrap-artifacts-signing.pub"
+for archive in "$repo/hosts/$host"/bootstrap-*.sh; do
+  git -C "$repo" add "$archive"
+done
 git -C "$repo" diff --cached --check
+(
+  cd "$repo"
+  ./scripts/check-host-parity.sh --staged
+)
+"$repo/scripts/check-secret-leakage.sh" --tracked --artifacts
 git -C "$repo" commit -m "release($host): establish artifact signing trust anchor"
 ```
+
+The release helper's `ARTIFACT_SIGNING_KEY` input is a path only. The private
+signing key and the SSH private keys must remain outside the checkout;
+`check-secret-leakage.sh --tracked --artifacts` is the final gate proving that
+no private-key material entered Git or a generated bootstrap/archive.
 
 The private key should remain in the protected signing directory after the
 first release, with an offline recovery copy if the operating policy calls

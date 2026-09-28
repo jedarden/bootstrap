@@ -53,7 +53,7 @@ ARTIFACT_SIGNING_KEY=/secure/path/bootstrap-artifacts-signing.pem \
 
 Each host directory publishes `artifact-manifest.txt` and its detached
 `artifact-manifest.sig`. The manifest is signed with the pinned public key in
-`hosts/ex44/keys/bootstrap-artifacts-signing.pub` and binds the documented
+`hosts/<host>/keys/bootstrap-artifacts-signing.pub` and binds the documented
 current `bootstrap.sh`, every immutable bootstrap archive, the launcher,
 version marker, and SSH public keys to SHA-256 digests. The release helper also
 requires the current `bootstrap.sh` to be byte-for-byte identical to
@@ -61,8 +61,10 @@ requires the current `bootstrap.sh` to be byte-for-byte identical to
 by the same signed release entry. Release signing keys are operator-held; never
 add one to the repository.
 For a new host lineage or the first signing release, follow the
-[initial trust-anchor provisioning runbook](./docs/security/artifact-signing.md)
-before publishing any artifact.
+[host-lineage onboarding and initial trust-anchor provisioning runbook](./docs/security/artifact-signing.md)
+before publishing any artifact. The release helper accepts
+`--host <name>` for a divergent directory; without it, it continues to target
+`hosts/ex44/` for backwards compatibility.
 
 Before rollout, validate every host artifact set from the current working tree
 and from the staged Git index:
@@ -83,12 +85,11 @@ lines but is no longer required.
 
 A release version is the same `MAJOR.MINOR.PATCH` in the standalone
 `START_SH_VERSION=...` assignment, the generated embedded copy,
-`hosts/ex44/start.sh.version`, the `bootstrap.sh` metadata, and
-`hosts/ex44/bootstrap-<version>.sh`. The helper rejects non-forward versions
+`hosts/<host>/start.sh.version`, the `bootstrap.sh` metadata, and
+`hosts/<host>/bootstrap-<version>.sh`. The helper rejects non-forward versions
 because deployed launchers only self-update to a higher version. Review the
-diff, then commit the release files (`hosts/ex44/start.sh`, `bootstrap.sh`,
-`start.sh.version`, the manifest/signature, and the new versioned archive) and
-publish the commit with:
+diff, then commit the release files for the selected host and publish the
+commit with:
 
 ```bash
 git add hosts/ex44/start.sh hosts/ex44/bootstrap.sh hosts/ex44/start.sh.version \
@@ -96,6 +97,14 @@ git add hosts/ex44/start.sh hosts/ex44/bootstrap.sh hosts/ex44/start.sh.version 
   hosts/ex44/bootstrap-1.3.2.sh
 git commit -m "release(start.sh): v1.3.2"
 ./scripts/start-sh-release.sh publish
+```
+
+For a divergent lineage, use the same commands with the host selector on
+every release-helper invocation, for example:
+
+```bash
+./scripts/start-sh-release.sh --host lab --check
+./scripts/start-sh-release.sh --host lab publish
 ```
 
 Forgejo remains the write-side source of truth. `publish` pushes only
@@ -115,6 +124,7 @@ Run the local self-update regression suite without contacting the network:
 tests/start-sh-self-update-test.sh
 tests/artifact-authentication-test.sh
 tests/signed-release-lifecycle-test.sh
+tests/host-lineage-onboarding-test.sh
 ```
 
 The signed-release lifecycle test runs the release helper in a disposable Git
@@ -123,6 +133,10 @@ Docker host from the verified archive, exercises launcher self-update, and
 publishes a higher-version rollback. It also checks tampered and incomplete
 downloads fail before the clean-host bootstrap boundary and runs the host
 artifact parity gate on each generated release.
+The host-lineage onboarding test creates a divergent `hosts/lab/` fixture,
+generates its first signed release with independent public inputs, runs live
+and staged parity checks, and confirms private keys stay outside Git and
+generated artifacts.
 
 ## Artifact authentication
 

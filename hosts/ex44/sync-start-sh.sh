@@ -49,6 +49,7 @@ trust_pattern = re.compile(
     r'^ARTIFACT_TRUSTED_KEY_ID=.*?^ARTIFACT_TRUSTED_PUBLIC_KEYS=[^\n]*\n',
     re.MULTILINE | re.DOTALL,
 )
+repo_url_pattern = re.compile(r'^REPO_URL="[^"\n]+"\n', re.MULTILINE)
 
 
 def extract_version(text, label):
@@ -65,9 +66,17 @@ def extract_trust_block(text, label):
     return match.group(0)
 
 
+def extract_repo_url(text, label):
+    matches = repo_url_pattern.findall(text)
+    if len(matches) != 1:
+        sys.exit(f"ERROR: {label} must contain exactly one REPO_URL assignment")
+    return matches[0]
+
+
 standalone_version = extract_version(start_sh, "start.sh")
 embedded_version = extract_version(bootstrap, "bootstrap.sh embedded start.sh")
 canonical_trust_block = extract_trust_block(start_sh, "start.sh")
+canonical_repo_url = extract_repo_url(start_sh, "start.sh")
 version_lines = version_file.splitlines()
 if len(version_lines) != 1 or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version_lines[0]):
     sys.exit("ERROR: start.sh.version must contain exactly one MAJOR.MINOR.PATCH line")
@@ -106,13 +115,20 @@ top_level_match = trust_pattern.search(bootstrap_prefix)
 if top_level_match is None:
     sys.exit("ERROR: could not find the top-level artifact trust-anchor block in bootstrap.sh")
 current_top_level_trust = top_level_match.group(0)
+top_level_repo_matches = list(repo_url_pattern.finditer(bootstrap_prefix))
+if len(top_level_repo_matches) != 1:
+    sys.exit("ERROR: bootstrap.sh must contain exactly one top-level REPO_URL assignment")
+top_level_repo_match = top_level_repo_matches[0]
+current_top_level_repo_url = top_level_repo_match.group(0)
 
 # Check mode: compare and exit without writing anything
 if os.environ.get('CHECK_MODE') == 'true':
-    if start_sh == current_embedded and canonical_trust_block == current_top_level_trust:
+    if (start_sh == current_embedded and
+            canonical_trust_block == current_top_level_trust and
+            canonical_repo_url == current_top_level_repo_url):
         sys.exit(0)  # In sync, silent success
 
-    print("ERROR: bootstrap.sh's launcher or trust-anchor copy is out of sync with start.sh", file=sys.stderr)
+    print("ERROR: bootstrap.sh's launcher, trust-anchor, or repository URL copy is out of sync with start.sh", file=sys.stderr)
     print("Run: ./sync-start-sh.sh (from this directory), then commit both files together", file=sys.stderr)
     print("", file=sys.stderr)
     if start_sh != current_embedded:
@@ -131,10 +147,25 @@ if os.environ.get('CHECK_MODE') == 'true':
             tofile="start.sh (trust anchors)",
         ):
             sys.stderr.write(line if line.endswith("\n") else line + "\n")
+    if canonical_repo_url != current_top_level_repo_url:
+        for line in difflib.unified_diff(
+            current_top_level_repo_url.splitlines(keepends=True),
+            canonical_repo_url.splitlines(keepends=True),
+            fromfile="bootstrap.sh (top-level repository URL)",
+            tofile="start.sh (repository URL)",
+        ):
+            sys.stderr.write(line if line.endswith("\n") else line + "\n")
     sys.exit(1)
 
 # Sync mode: update the file
-new_prefix = bootstrap_prefix[:top_level_match.start()] + canonical_trust_block + bootstrap_prefix[top_level_match.end():]
+new_prefix = (
+    bootstrap_prefix[:top_level_repo_match.start()] + canonical_repo_url +
+    bootstrap_prefix[top_level_repo_match.end():]
+)
+top_level_match = trust_pattern.search(new_prefix)
+if top_level_match is None:
+    sys.exit("ERROR: could not find the top-level artifact trust-anchor block after updating REPO_URL")
+new_prefix = new_prefix[:top_level_match.start()] + canonical_trust_block + new_prefix[top_level_match.end():]
 new_bootstrap = new_prefix + start_sh + bootstrap[body_end:]
 
 new_embedded_version = extract_version(new_bootstrap, "generated bootstrap.sh embedded start.sh")

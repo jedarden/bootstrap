@@ -154,8 +154,17 @@ done < <(awk -F $'\t' 'NF == 2 { print }' "$TARGET_MAP")
 Record the lineage, target, and observed version for every map row. Do not
 report the rollout complete if one target is unavailable or reports a
 different version.
-The local start.sh.version and signed manifest checks do not substitute for
-this live inventory check.
+Then compare every installed launcher with the signed digest from its selected
+lineage manifest:
+
+~~~bash
+./scripts/verify-deployed-launchers.sh
+~~~
+
+This verifies each local lineage manifest signature before using its `start.sh`
+digest, then checks the digest of `$HOME/start.sh` on that lineage's mapped
+targets. A version match alone does not prove the deployed launcher bytes are
+authentic, and the local checks do not substitute for the live inventory check.
 
 ## Roll back without moving backward
 

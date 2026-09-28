@@ -44,6 +44,7 @@ case "${1:-}" in
         bash -n "$ROOT/tests/bootstrap-platform-acceptance-test.sh"
         bash -n "$ROOT/tests/hetzner-robot-test.sh"
         bash -n "$ROOT/scripts/start-sh-release.sh"
+        bash -n "$ROOT/scripts/verify-deployed-launchers.sh"
         bash -n "$ROOT/scripts/check-hooks-path.sh"
         bash -n "$ROOT/tests/hook-activation-test.sh"
         "$ROOT/tests/start-sh-self-update-test.sh"

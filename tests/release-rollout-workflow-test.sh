@@ -55,6 +55,8 @@ assert_documented() {
         fail 'runbook omits live rollout target validation'
     grep -Fq './scripts/check-rollout-targets.sh --staged' "$doc" ||
         fail 'runbook omits staged rollout target validation'
+    grep -Fq './scripts/verify-deployed-launchers.sh' "$doc" ||
+        fail 'runbook omits signed deployed-launcher digest verification'
     grep -Fq 'tests/release-rollout-workflow-test.sh' "$doc" ||
         fail 'runbook omits its regression test'
     grep -Fq './docs/release-rollout.md' "$ROOT/README.md" ||
@@ -154,6 +156,7 @@ rollout_and_verify() {
         [[ "$output" == "start v$version" ]] ||
             fail "$host post-rollout version check failed: $output"
     done
+    (cd "$FIXTURE" && PATH="$TMP/bin:$PATH" DEPLOY_ROOT="$DEPLOYED" scripts/verify-deployed-launchers.sh >/dev/null)
 }
 
 run_parity_and_checks() {
@@ -196,7 +199,7 @@ openssl pkey -in "$PRIVATE_KEY" -pubout -out "$PUBLIC_KEY" 2>/dev/null
 
 cp -p "$ROOT/README.md" "$FIXTURE/README.md"
 cp -p "$ROOT/docs/release-rollout-targets.tsv" "$FIXTURE/docs/"
-cp -p "$ROOT/scripts/check-host-parity.sh" "$ROOT/scripts/check-rollout-targets.sh" "$ROOT/scripts/check-secret-leakage.sh" "$ROOT/scripts/start-sh-release.sh" "$FIXTURE/scripts/"
+cp -p "$ROOT/scripts/check-host-parity.sh" "$ROOT/scripts/check-rollout-targets.sh" "$ROOT/scripts/check-secret-leakage.sh" "$ROOT/scripts/start-sh-release.sh" "$ROOT/scripts/verify-deployed-launchers.sh" "$FIXTURE/scripts/"
 prepare_lineage ex44
 prepare_lineage lab
 printf '%s\n' '| [hosts/lab/](./hosts/lab/) | Disposable second release lineage |' >> "$FIXTURE/README.md"
@@ -262,6 +265,24 @@ git -C "$FIXTURE" commit -q -m "release"
 publish_and_verify_distribution
 install_fake_ssh
 rollout_and_verify "$RELEASE_VERSION"
+
+echo 'Rejecting tampered and wrong-lineage deployed launchers...'
+cp -p "$DEPLOYED/ex44/start.sh" "$TMP/ex44-start-good.sh"
+printf '%s\n' '# tampered deployed launcher' >> "$DEPLOYED/ex44/start.sh"
+if (cd "$FIXTURE" && PATH="$TMP/bin:$PATH" DEPLOY_ROOT="$DEPLOYED" scripts/verify-deployed-launchers.sh >"$TMP/tampered-output" 2>&1); then
+    fail 'signed launcher digest verification accepted tampered deployed content'
+fi
+grep -Fq 'deployed launcher digest does not match the selected lineage manifest' "$TMP/tampered-output" ||
+    fail 'tampered launcher failure did not identify a digest mismatch'
+cp -p "$TMP/ex44-start-good.sh" "$DEPLOYED/ex44/start.sh"
+
+cp -p "$FIXTURE/hosts/lab/start.sh" "$DEPLOYED/ex44/start.sh"
+if (cd "$FIXTURE" && PATH="$TMP/bin:$PATH" DEPLOY_ROOT="$DEPLOYED" scripts/verify-deployed-launchers.sh >"$TMP/wrong-lineage-output" 2>&1); then
+    fail 'signed launcher digest verification accepted the wrong lineage launcher'
+fi
+grep -Fq 'deployed launcher digest does not match the selected lineage manifest' "$TMP/wrong-lineage-output" ||
+    fail 'wrong-lineage launcher failure did not identify a digest mismatch'
+cp -p "$TMP/ex44-start-good.sh" "$DEPLOYED/ex44/start.sh"
 
 echo 'Preparing the forward-version rollback for both lineages...'
 for host in ex44 lab; do

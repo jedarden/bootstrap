@@ -18,10 +18,21 @@ BACKUP=${ARTIFACT_SIGNING_BACKUP:-}
 APPROVED_FINGERPRINT=${ARTIFACT_SIGNING_APPROVED_FINGERPRINT:-}
 RECOVERY_DIR=${ARTIFACT_SIGNING_RECOVERY_DIR:-}
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/bootstrap-artifact-key-recovery.XXXXXX")
+TMP=$(realpath -e -- "$TMP")
+trap 'rm -rf "$TMP"' EXIT
+case "$TMP/" in
+    "$ROOT/"*)
+        echo "offline artifact-signing-key recovery drill failed: temporary storage must be outside the repository" >&2
+        exit 1
+        ;;
+esac
+[[ "$(stat -c '%a' -- "$TMP")" == 700 ]] || {
+    echo "offline artifact-signing-key recovery drill failed: temporary storage must have mode 0700" >&2
+    exit 1
+}
 FIXTURE="$TMP/repository"
 DISPOSABLE=false
 DISPOSABLE_PUBLIC_KEY="$TMP/offline-backup/public.pem"
-trap 'rm -rf "$TMP"' EXIT
 
 die() {
     echo "offline artifact-signing-key recovery drill failed: $*" >&2
@@ -113,6 +124,8 @@ restore_backup() {
         die "recovery directory must be outside the repository"
     [[ "$(stat -c '%a' -- "$recovery_path")" == 700 ]] ||
         die "recovery directory must have mode 0700"
+    [[ -z "$(find "$recovery_path" -mindepth 1 -maxdepth 1 -print -quit)" ]] ||
+        die "recovery directory must be empty"
     destination="$recovery_path/recovered-artifact-signing-key.pem"
     [[ ! -e "$destination" ]] ||
         die "recovery destination already exists; choose a fresh recovery directory"

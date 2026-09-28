@@ -132,9 +132,9 @@ PY
 
 (cd "$FIXTURE/hosts/ex44" && ./sync-start-sh.sh >/dev/null)
 
-# bootstrap.sh has its own top-level raw endpoint for artifact authentication;
-# keep the embedded launcher endpoint and this verifier on the same HTTPS
-# fixture without changing the production artifact contract.
+# sync-start-sh.sh propagates the canonical launcher URL to bootstrap.sh's
+# top-level verifier, so the initial bootstrap and installed launcher use the
+# same HTTPS fixture.
 python3 - "$FIXTURE/hosts/ex44/bootstrap.sh" "$RAW_RELEASE_BASE" <<'PY'
 import pathlib
 import sys
@@ -142,11 +142,10 @@ import sys
 path = pathlib.Path(sys.argv[1])
 raw_base = sys.argv[2]
 text = path.read_text()
-source = 'REPO_URL="https://raw.githubusercontent.com/jedarden/bootstrap/main/hosts/ex44"'
-replacement = f'REPO_URL="{raw_base}"'
-if text.count(source) < 1:
-    raise SystemExit("bootstrap.sh is missing its top-level REPO_URL")
-path.write_text(text.replace(source, replacement, 1))
+expected = f'REPO_URL="{raw_base}"'
+prefix = text.split('    cat > "/home/$user/start.sh" << \'STARTSH\'\n', 1)[0]
+if prefix.count(expected) != 1:
+    raise SystemExit("bootstrap.sh has the wrong top-level REPO_URL")
 PY
 
 git -C "$FIXTURE" init -q -b main

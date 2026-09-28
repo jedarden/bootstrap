@@ -232,3 +232,38 @@ contract. If the key is lost or suspected compromised, stop signing and use
 the documented [emergency compromise recovery procedure](./artifact-signing-compromise-recovery.md);
 do not use planned overlap rotation or replace the only trust anchor without
 the out-of-band host recovery described there.
+
+## Exercise offline backup recovery
+
+Periodically restore the offline copy into a new protected directory and
+prove it still matches both the separately approved fingerprint and the
+repository's pinned public trust anchor. The drill signs the current release
+manifest in a temporary repository copy, verifies that signature, and checks
+the copy for leaked private-key material. It does not publish anything. The
+recovered key remains at the supplied recovery path and is never printed or
+passed as a command argument.
+
+Create an empty recovery directory on encrypted storage with mode `0700`, then
+run the drill with the backup's filesystem path and the fingerprint from its
+independent approval record:
+
+```bash
+install -d -m 0700 /secure/bootstrap-signing/recovery-drill
+ARTIFACT_SIGNING_BACKUP=/secure/offline/bootstrap-signing/private.pem \
+ARTIFACT_SIGNING_APPROVED_FINGERPRINT='<approved-64-hex-fingerprint>' \
+ARTIFACT_SIGNING_RECOVERY_DIR=/secure/bootstrap-signing/recovery-drill \
+  tests/artifact-signing-key-recovery-drill.sh
+```
+
+The drill restores the key to
+`$ARTIFACT_SIGNING_RECOVERY_DIR/recovered-artifact-signing-key.pem` with mode
+`0600`, checks its fingerprint against the approved value and pinned public
+key, signs a temporary copy of the current manifest, and verifies the
+signature. Keep or securely remove the recovered copy according to the key
+custody policy. If any check fails, do not sign or publish a release; retain
+the recovery directory for investigation.
+
+The no-argument mode used by automated checks creates a disposable key and
+offline-copy fixture, removes the original, then exercises the same restore,
+fingerprint, signature, and leakage checks. It leaves no key in the checkout
+or published artifacts.

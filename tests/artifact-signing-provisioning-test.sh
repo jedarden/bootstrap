@@ -60,6 +60,8 @@ assert_documented() {
     grep -Fq 'install -m 0644' "$doc" || fail 'runbook does not install the public key'
     grep -Fq 'ARTIFACT_SIGNING_KEY=' "$doc" || fail 'runbook omits path-only signing'
     grep -Fq 'sync-start-sh.sh --check' "$doc" || fail 'runbook omits trust-anchor sync'
+    grep -Fq 'tests/artifact-signing-key-recovery-drill.sh' "$doc" ||
+        fail 'runbook omits offline signing-key recovery drill'
 }
 
 assert_documented

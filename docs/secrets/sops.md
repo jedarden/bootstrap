@@ -201,6 +201,99 @@ restic, `/etc/restic/b2.env`, owned by root with mode `0600`; the encrypted
 input, SOPS FIFO, age identity, and decrypted YAML never exist on the managed
 host.
 
+## Age-recipient rotation
+
+Rotate an age recipient when its operator, recovery custodian, or storage
+boundary changes. A primary rotation replaces the primary recipient while
+retaining the offline recovery recipient; a recovery rotation does the reverse.
+The retained identity must be available for the entire rotation, because it is
+the recovery proof that permits the old recipient to be removed.
+
+SOPS `rotate` is the required operation. It generates a new data-encryption
+key, re-encrypts every value, adds the replacement recipient, and removes the
+retired recipient in one write. `updatekeys` alone changes only the wrapped
+data key and is not the repository's recipient-rotation procedure.
+
+1. Generate the replacement age identity in the new operator or offline
+   custody location. Keep the private identity in a mode-0600 file and derive
+   only its public recipient for the change review. Do not put the identity,
+   plaintext, or a private key in Git, a command argument, shell history, or a
+   log. The retained identity must be tested before the old identity is
+   disabled.
+2. Change the public recipient in the applicable `.sops.yaml` creation rules,
+   keeping the retained recipient. For a primary rotation the final pair is
+   `new-primary, offline-recovery`; for a recovery rotation it is
+   `primary, new-offline-recovery`. Commit that public configuration with the
+   ciphertext changes.
+3. Enumerate every tracked SOPS file. The repository currently manages both
+   `secrets/bootstrap/*.sops.env` and `secrets/ansible/*.sops.yml`; do not
+   rotate only the file that prompted the change:
+
+   ```bash
+   git ls-files -z -- \
+     'secrets/**/*.sops.env' \
+     'secrets/**/*.sops.yml' \
+     'secrets/**/*.sops.yaml'
+   ```
+
+   For each path, use the retained identity through `SOPS_AGE_KEY_FILE` and
+   rotate the public recipient envelope. The identity is named by an
+   environment variable, never supplied as a literal key:
+
+   ```bash
+   while IFS= read -r -d '' file; do
+     case "$file" in
+       *.sops.env) input_type=dotenv ;;
+       *.sops.yml|*.sops.yaml) input_type=yaml ;;
+       *) continue ;;
+     esac
+     env -u SOPS_AGE_KEY -u SOPS_AGE_RECIPIENTS \
+       SOPS_AGE_KEY_FILE=/secure/path/to/retained-identity.txt \
+       sops rotate --in-place \
+         --input-type "$input_type" --output-type "$input_type" \
+         --add-age "$NEW_RECIPIENT" --rm-age "$OLD_RECIPIENT" "$file"
+   done < <(git ls-files -z -- \
+     'secrets/**/*.sops.env' \
+     'secrets/**/*.sops.yml' \
+     'secrets/**/*.sops.yaml')
+   ```
+
+   Stop if any command fails; do not continue with a partially rotated set.
+4. Verify the committed diff before retiring anything. Every ciphertext must
+   still report encrypted, contain the replacement and retained recipients,
+   and contain no retired recipient. Decrypt each file with the retained
+   identity to `/dev/null` (or through its normal FIFO/consumer path) and
+   verify the expected consumer contract without saving a plaintext copy:
+
+   ```bash
+   env -u SOPS_AGE_KEY -u SOPS_AGE_RECIPIENTS \
+     SOPS_AGE_KEY_FILE=/secure/path/to/retained-identity.txt \
+     sops decrypt path/to/file.sops.env >/dev/null
+   scripts/check-sops-contract.sh
+   tests/sops-recipient-rotation-test.sh
+   git diff --check
+   ```
+
+   The rotation test performs this check for both replacement directions and
+   both managed file formats. It also confirms the replacement identity can
+   decrypt, the old identity cannot decrypt any rotated file, failed
+   decryption emits no plaintext, and no emitted artifact contains a private
+   age identity marker. It uses disposable mode-0600 identities and fixture
+   values under a mode-0700 temporary directory; it never prints either.
+5. Only after the retained-identity recovery test and review pass, retire the
+   old identity from its workstation, escrow, access-control, and backup
+   locations according to the applicable key-custody policy. Record the
+   retirement date and the verified commit. Keep the replacement and retained
+   identities available for recovery, and run the normal SOPS recovery drill
+   after deployment.
+
+This procedure rotates the current tracked ciphertext. Git history still
+contains older ciphertext and is not rewritten by `sops rotate`; if the old
+identity was compromised, treat historical ciphertext as exposed and handle
+that as a separate incident-response and secret-value rotation. Never test a
+retired identity by placing its private key in the repository or by printing
+decrypted output.
+
 ## Bootstrap consumption
 
 SOPS decrypts only on the operator workstation and passes the two dotenv

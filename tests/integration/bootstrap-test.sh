@@ -1,14 +1,50 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# Run the real EX44 bootstrap in a disposable Debian host, cross a simulated
-# reboot boundary, and rerun it. This is deliberately an installation,
-# persistence, and idempotence test, not a second implementation of bootstrap
-# --verify; the latter is a read-only production check and is invoked separately
-# near the end of this test.
+# Run the real EX44 bootstrap in disposable Debian and Ubuntu hosts, cross a
+# simulated reboot boundary, and rerun it. This is deliberately an
+# installation, persistence, and idempotence test, not a second implementation
+# of bootstrap --verify; the latter is a read-only production check and is
+# invoked separately near the end of each distribution case.
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
-IMAGE=${BOOTSTRAP_TEST_IMAGE:-debian:12-slim}
+
+# Keep the full integration scenario in one place while exercising every
+# supported base image. A child invocation owns one disposable container, so a
+# failure leaves the --keep debugging behavior unchanged for that case.
+if [[ ${BOOTSTRAP_TEST_MATRIX_CHILD:-false} != true ]]; then
+    debian_image=${BOOTSTRAP_TEST_IMAGE:-${BOOTSTRAP_TEST_DEBIAN_IMAGE:-debian:12-slim}}
+    ubuntu_image=${BOOTSTRAP_TEST_UBUNTU_IMAGE:-ubuntu:24.04}
+
+    for distribution in debian ubuntu; do
+        case "$distribution" in
+            debian) image=$debian_image ;;
+            ubuntu) image=$ubuntu_image ;;
+        esac
+        echo "=== Running bootstrap integration for $distribution ($image) ==="
+        BOOTSTRAP_TEST_MATRIX_CHILD=true \
+            BOOTSTRAP_TEST_DISTRIBUTION="$distribution" \
+            BOOTSTRAP_TEST_IMAGE="$image" \
+            "$0" "$@"
+    done
+    echo 'Bootstrap integration matrix passed for Debian 12 and Ubuntu 24.04.'
+    exit 0
+fi
+
+DISTRIBUTION=${BOOTSTRAP_TEST_DISTRIBUTION:?BOOTSTRAP_TEST_DISTRIBUTION is required}
+IMAGE=${BOOTSTRAP_TEST_IMAGE:-}
+case "$DISTRIBUTION" in
+    debian)
+        IMAGE=${IMAGE:-debian:12-slim}
+        ;;
+    ubuntu)
+        IMAGE=${IMAGE:-ubuntu:24.04}
+        ;;
+    *)
+        echo "unsupported integration distribution: $DISTRIBUTION" >&2
+        exit 2
+        ;;
+esac
 KEEP_CONTAINER=false
 CONTAINER="bootstrap-integration-${PPID}-${RANDOM}"
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/bootstrap-integration.XXXXXX")
@@ -30,7 +66,9 @@ usage() {
 Usage: tests/integration/bootstrap-test.sh [--keep]
 
 Environment:
-  BOOTSTRAP_TEST_IMAGE  Debian image to use (default: debian:12-slim)
+  BOOTSTRAP_TEST_IMAGE          Override the Debian image (legacy alias)
+  BOOTSTRAP_TEST_DEBIAN_IMAGE   Override the Debian image
+  BOOTSTRAP_TEST_UBUNTU_IMAGE   Override the Ubuntu image
 USAGE
 }
 
@@ -70,7 +108,7 @@ docker run --detach \
     "$IMAGE" sleep infinity >/dev/null
 
 docker exec "$CONTAINER" bash /src/tests/integration/host-fixture.sh \
-    /src/hosts/ex44/bootstrap.sh
+    /src/hosts/ex44/bootstrap.sh "$DISTRIBUTION"
 
 echo 'Checking non-interactive bootstrap safe-stop...'
 noninteractive_output="$TMP/noninteractive-output"
@@ -102,16 +140,6 @@ if docker exec "$CONTAINER" test -s /var/lib/bootstrap-test/commands.log; then
     exit 1
 fi
 echo 'PASS: non-interactive bootstrap refuses before host changes'
-
-# The fixture intentionally makes apt-get a no-op. A real Debian/Ubuntu host
-# installs OpenSSL in bootstrap's core package step, but a minimal test image
-# may not have it before that no-op. Skip the remaining integration path rather
-# than weakening the production signature check or mutating the fixture into a
-# different artifact.
-if ! docker exec "$CONTAINER" bash -ceu 'command -v openssl >/dev/null 2>&1'; then
-    echo 'SKIP: bootstrap integration fixture lacks openssl for signed-artifact verification' >&2
-    exit 0
-fi
 
 first_input="$TMP/first-input"
 tailscale_auth_key='tskey-auth-integration'

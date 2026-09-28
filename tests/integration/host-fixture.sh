@@ -1,13 +1,69 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Prepare a disposable Debian container for bootstrap integration tests. The
-# bootstrap is intentionally run unchanged except for its /dev/tty input
-# redirect (the test runner supplies stdin instead). Commands whose real
+# Prepare a disposable supported-distribution container for bootstrap
+# integration tests. The bootstrap is intentionally run unchanged except for
+# its /dev/tty input redirect (the test runner supplies stdin instead). Commands whose real
 # implementations would mutate the container host kernel, require a systemd
 # PID 1, or contact a real account are small deterministic doubles.
 
 BOOTSTRAP_SOURCE=${1:?usage: host-fixture.sh /path/to/bootstrap.sh}
+# Keep the original one-argument interface for the signed-release acceptance
+# test; the matrix runner passes the explicit distribution for each case.
+EXPECTED_DISTRIBUTION=${2:-debian}
+
+case "$EXPECTED_DISTRIBUTION" in
+    debian)
+        expected_id=debian
+        expected_version=12
+        expected_codename=bookworm
+        ;;
+    ubuntu)
+        expected_id=ubuntu
+        expected_version=24.04
+        expected_codename=noble
+        ;;
+    *)
+        echo "unsupported fixture distribution: $EXPECTED_DISTRIBUTION" >&2
+        exit 2
+        ;;
+esac
+
+# Assert the actual image identity before installing any command doubles. This
+# keeps the matrix honest when a custom image override is used and verifies
+# the documented amd64 boundary rather than merely labeling a test case.
+# shellcheck disable=SC1091
+. /etc/os-release
+[[ ${ID:-} == "$expected_id" ]] || {
+    echo "expected $expected_id image, got ${ID:-unknown}" >&2
+    exit 1
+}
+[[ ${VERSION_ID:-} == "$expected_version" ]] || {
+    echo "expected $expected_id $expected_version, got ${VERSION_ID:-unknown}" >&2
+    exit 1
+}
+[[ ${VERSION_CODENAME:-} == "$expected_codename" ]] || {
+    echo "expected codename $expected_codename, got ${VERSION_CODENAME:-unknown}" >&2
+    exit 1
+}
+[[ $(dpkg --print-architecture) == amd64 ]] || {
+    echo "expected amd64 image, got $(dpkg --print-architecture)" >&2
+    exit 1
+}
+echo "fixture verified: $expected_id $expected_version ($expected_codename), amd64"
+
+# The minimal distribution images do not consistently include OpenSSL, while
+# the production bootstrap must authenticate its signed artifact before it
+# proceeds. Install only that verifier with the real package manager before
+# replacing apt-get with the fixture double below. The rest of bootstrap's
+# package operations remain deterministic and offline.
+if ! command -v openssl >/dev/null 2>&1; then
+    echo 'Installing fixture prerequisite: openssl'
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update -qq
+    apt-get install -y -qq --no-install-recommends openssl >/dev/null
+fi
+
 ROOT=/var/lib/bootstrap-test
 KEYS="$ROOT/keys"
 SHIM_DIR=/usr/local/lib/bootstrap-test

@@ -4,12 +4,14 @@ Run the disposable-host integration and idempotence test with:
 
     tests/integration/bootstrap-test.sh
 
-The runner starts a privileged, disposable Debian container, runs the real
-hosts/ex44/bootstrap.sh, and checks the resulting SSH, UFW, sysctl, fail2ban,
+The runner starts a privileged, disposable Debian 12 container and a
+privileged, disposable Ubuntu 24.04 container. In each image it runs the real
+hosts/ex44/bootstrap.sh and checks the resulting SSH, UFW, sysctl, fail2ban,
 auditd, user workspace, Tailscale, rootless Docker, restic/backup, and launcher
 setup. It checks both default users (`coding` and `trading`), effective
 security command output, unprivileged launcher and Docker-helper execution,
-and cross-user read/write boundaries.
+and cross-user read/write boundaries. The fixture verifies each image's
+release, codename, and amd64 architecture before provisioning begins.
 
 It then compares a normalized snapshot across a second bootstrap run, crosses a
 simulated reboot boundary that clears volatile service and user-runtime state,
@@ -44,7 +46,10 @@ paths, and state it produces. It intentionally does not call --verify; that
 is a separate read-only production check.
 
 Requirements: Docker with permission to run privileged containers and network
-access to pull debian:12-slim when it is not already cached. If Docker is not
-reachable, the test reports `SKIP` so host-independent definition-of-done
-checks remain usable; set `BOOTSTRAP_TEST_REQUIRE_DOCKER=true` to make that
-environment a failure. Use --keep while diagnosing a failed disposable host.
+access to pull `debian:12-slim` and `ubuntu:24.04` plus the distribution package
+mirror used to install OpenSSL in minimal images. If Docker is not reachable,
+the test reports `SKIP` so host-independent definition-of-done checks remain
+usable; set `BOOTSTRAP_TEST_REQUIRE_DOCKER=true` to make that environment a
+failure. Use `--keep` while diagnosing a failed disposable host.
+`BOOTSTRAP_TEST_DEBIAN_IMAGE` and `BOOTSTRAP_TEST_UBUNTU_IMAGE` override the
+two images independently.

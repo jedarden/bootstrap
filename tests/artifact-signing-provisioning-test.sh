@@ -35,6 +35,22 @@ assert_mode() {
         fail "$path has mode $actual, expected $expected"
 }
 
+assert_release_preflight_unchanged() {
+    local description=$1
+    cmp -s "$TMP/release-inputs.sha256" <(
+        sha256sum \
+            "$FIXTURE/hosts/ex44/start.sh" \
+            "$FIXTURE/hosts/ex44/bootstrap.sh" \
+            "$FIXTURE/hosts/ex44/start.sh.version"
+    ) || fail "$description changed release inputs"
+    [[ ! -e "$FIXTURE/hosts/ex44/bootstrap-$VERSION.sh" ]] ||
+        fail "$description created the first-release archive"
+    [[ ! -e "$FIXTURE/hosts/ex44/artifact-manifest.txt" ]] ||
+        fail "$description created an unsigned manifest"
+    [[ ! -e "$FIXTURE/hosts/ex44/artifact-manifest.sig" ]] ||
+        fail "$description created a detached signature"
+}
+
 assert_documented() {
     local doc="$ROOT/docs/security/artifact-signing.md"
     [[ -f "$doc" ]] || fail 'initial provisioning runbook is missing'
@@ -70,8 +86,10 @@ OTHER_PUBLIC_KEY="$TMP/other-public.pem"
 openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 \
     -out "$TMP/other-private.pem" 2>/dev/null
 openssl pkey -in "$TMP/other-private.pem" -pubout -out "$OTHER_PUBLIC_KEY" 2>/dev/null
-[[ "$(fingerprint "$OTHER_PUBLIC_KEY")" != "$EXPECTED_FINGERPRINT" ]] ||
-    fail 'different public key unexpectedly matched the approved fingerprint'
+OTHER_FINGERPRINT=$(fingerprint "$OTHER_PUBLIC_KEY")
+if [[ "$OTHER_FINGERPRINT" == "$EXPECTED_FINGERPRINT" ]]; then
+    fail 'fingerprint approval accepted a mismatched public key'
+fi
 
 cp -p "$ROOT/README.md" "$FIXTURE/"
 cp -p \
@@ -130,6 +148,56 @@ grep -Fq "$KEY_ID" "$FIXTURE/hosts/ex44/bootstrap.sh" ||
 # Remove the historical signed metadata so the next release is the fixture's
 # first signed release. The immutable 1.3.1 archive remains in the lineage.
 rm "$FIXTURE/hosts/ex44/artifact-manifest.txt" "$FIXTURE/hosts/ex44/artifact-manifest.sig"
+sha256sum \
+    "$FIXTURE/hosts/ex44/start.sh" \
+    "$FIXTURE/hosts/ex44/bootstrap.sh" \
+    "$FIXTURE/hosts/ex44/start.sh.version" > "$TMP/release-inputs.sha256"
+
+echo 'Rejecting a first release without a signing key...'
+if (
+    cd "$FIXTURE"
+    env -u ARTIFACT_SIGNING_KEY \
+        scripts/start-sh-release.sh release "$VERSION" >"$RELEASE_LOG" 2>&1
+); then
+    fail 'release without a signing key unexpectedly succeeded'
+fi
+assert_release_preflight_unchanged 'missing signing key rejection'
+
+echo 'Rejecting a first release without the pinned trust anchor...'
+mv "$PINNED_KEY" "$TMP/missing-pinned-key.pub"
+if (
+    cd "$FIXTURE"
+    ARTIFACT_SIGNING_KEY="$PRIVATE_KEY" \
+        scripts/start-sh-release.sh release "$VERSION" >"$RELEASE_LOG" 2>&1
+); then
+    fail 'release without a pinned trust anchor unexpectedly succeeded'
+fi
+assert_release_preflight_unchanged 'missing trust anchor rejection'
+mv "$TMP/missing-pinned-key.pub" "$PINNED_KEY"
+
+echo 'Rejecting a first release with a mismatched pinned fingerprint...'
+install -m 0644 "$OTHER_PUBLIC_KEY" "$PINNED_KEY"
+if (
+    cd "$FIXTURE"
+    ARTIFACT_SIGNING_KEY="$PRIVATE_KEY" \
+        scripts/start-sh-release.sh release "$VERSION" >"$RELEASE_LOG" 2>&1
+); then
+    fail 'release with a mismatched pinned fingerprint unexpectedly succeeded'
+fi
+assert_release_preflight_unchanged 'fingerprint mismatch rejection'
+install -m 0644 "$PUBLIC_KEY" "$PINNED_KEY"
+
+echo 'Rejecting a first release with a private key inside the host repository...'
+cp -p "$PRIVATE_KEY" "$FIXTURE/hosts/ex44/signing-private.pem"
+if (
+    cd "$FIXTURE"
+    ARTIFACT_SIGNING_KEY="$PRIVATE_KEY" \
+        scripts/start-sh-release.sh release "$VERSION" >"$RELEASE_LOG" 2>&1
+); then
+    fail 'release with a repository private key unexpectedly succeeded'
+fi
+assert_release_preflight_unchanged 'repository private-key rejection'
+rm "$FIXTURE/hosts/ex44/signing-private.pem"
 
 echo 'Creating the first signed release with a path-only private-key input...'
 if ! (

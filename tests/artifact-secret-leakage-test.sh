@@ -44,6 +44,15 @@ AGE_PRIVATE="$TMP/age-key.txt"
 printf '%s\n' 'AGE-SECRET-' 'KEY-1runtime-only-fixture' | tr -d '\n' > "$AGE_PRIVATE"
 expect_failure "$SCANNER" --path "$AGE_PRIVATE"
 
+echo 'Checking PEM private keys are rejected...'
+PEM_PRIVATE="$TMP/private.pem"
+{
+    printf '%s%s\n' '-----BEGIN ' 'PRIVATE KEY-----'
+    printf '%s\n' 'runtime-only-fixture'
+    printf '%s%s\n' '-----END ' 'PRIVATE KEY-----'
+} > "$PEM_PRIVATE"
+expect_failure "$SCANNER" --path "$PEM_PRIVATE"
+
 echo 'Checking OpenBao tokens are rejected...'
 OPENBAO_TOKEN="$TMP/openbao.txt"
 printf 'token=hvs.%s\n' 'runtimeonlytokenvalue1234567890' > "$OPENBAO_TOKEN"

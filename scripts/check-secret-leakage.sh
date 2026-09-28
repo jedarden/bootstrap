@@ -93,7 +93,7 @@ if [[ "$SCAN_ARTIFACTS" == true && -d "$ROOT/hosts" ]]; then
         done
         while IFS= read -r -d '' path; do
             add_file "$path"
-        done < <(find "$host_dir" -maxdepth 1 -type f -name 'bootstrap-*.sh' -print0)
+        done < <(find "$host_dir" -type f -print0)
     done < <(find "$ROOT/hosts" -mindepth 1 -maxdepth 1 -type d -print0)
 fi
 
@@ -125,6 +125,9 @@ import sys
 # Keep sensitive marker strings assembled so the tracked-file scope does not
 # report this audit's own source code.
 age_private_prefix = "AGE-SECRET-" + "KEY-"
+private_key_pattern = re.compile(
+    r"-----BEGIN (?:[A-Z][A-Z0-9]* )?" + "PRIVATE " + "KEY-----"
+)
 
 
 def is_placeholder(value: str) -> bool:
@@ -192,6 +195,10 @@ def scan(path: pathlib.Path) -> list[tuple[int, str]]:
     marker_at = text.find(age_private_prefix)
     if marker_at >= 0:
         findings.append((line_number(text, marker_at), "age private key"))
+
+    private_key = private_key_pattern.search(text)
+    if private_key:
+        findings.append((line_number(text, private_key.start()), "PEM private key"))
 
     # OpenBao/Vault token wire formats are high-confidence even when the token
     # is not assigned to a variable.

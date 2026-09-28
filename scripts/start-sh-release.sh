@@ -300,6 +300,19 @@ require_signing_key() {
         die "ARTIFACT_SIGNING_KEY must point to the release signing key (kept outside Git)"
     command -v openssl >/dev/null 2>&1 || die "openssl is required to sign the artifact manifest"
     command -v base64 >/dev/null 2>&1 || die "base64 is required to sign the artifact manifest"
+
+    [[ -f "$SIGNING_PUBLIC_KEY" ]] ||
+        die "pinned artifact trust anchor is missing: $SIGNING_PUBLIC_KEY"
+
+    local signing_fingerprint trusted_fingerprint
+    signing_fingerprint=$(openssl pkey -in "$signing_key" -pubout -outform DER 2>/dev/null |
+        sha256sum | awk '{print $1}') ||
+        die "ARTIFACT_SIGNING_KEY is not a readable signing key"
+    trusted_fingerprint=$(openssl pkey -pubin -in "$SIGNING_PUBLIC_KEY" -outform DER 2>/dev/null |
+        sha256sum | awk '{print $1}') ||
+        die "pinned artifact trust anchor is not a readable public key"
+    [[ "$signing_fingerprint" == "$trusted_fingerprint" ]] ||
+        die "ARTIFACT_SIGNING_KEY does not match the pinned artifact trust anchor"
 }
 
 manifest_artifacts() {

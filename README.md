@@ -107,6 +107,10 @@ every release-helper invocation, for example:
 ./scripts/start-sh-release.sh --host lab publish
 ```
 
+For the repeatable multi-host sequence—including staged and live parity,
+Forgejo/GitHub/raw convergence, deployment verification on every target, and
+forward-version rollback—follow the [release rollout runbook](./docs/release-rollout.md).
+
 Forgejo remains the write-side source of truth. `publish` pushes only
 `origin/main`; the configured Forgejo mirror then publishes the same commit
 through GitHub, which is the URL used by bootstrap and self-update.
@@ -125,6 +129,7 @@ tests/start-sh-self-update-test.sh
 tests/artifact-authentication-test.sh
 tests/signed-release-lifecycle-test.sh
 tests/host-lineage-onboarding-test.sh
+tests/release-rollout-workflow-test.sh
 ```
 
 The signed-release lifecycle test runs the release helper in a disposable Git
@@ -137,6 +142,10 @@ The host-lineage onboarding test creates a divergent `hosts/lab/` fixture,
 generates its first signed release with independent public inputs, runs live
 and staged parity checks, and confirms private keys stay outside Git and
 generated artifacts.
+The multi-host rollout test models the Forgejo mirror and raw HTTPS
+distribution locally, validates both host lineages from the staged and live
+views, deploys and verifies every target, and repeats the documented rollback
+path with a new forward version.
 
 ## Artifact authentication
 

@@ -128,6 +128,8 @@ decrypt_and_compare() {
     local expected=$4
     local label=$5
     local decrypted="$WORK/$label.decrypted"
+    local b2_account_key_label='B2_''ACCOUNT_KEY'
+    local restic_password_label='RESTIC_''PASSWORD'
 
     sops_with_identity "$identity" decrypt \
         --input-type "$type" --output-type "$type" "$ciphertext" \
@@ -148,11 +150,11 @@ decrypt_and_compare() {
                 die "$label YAML boolean changed during rotation"
             grep -Eq '^[[:space:]]+B2_ACCOUNT_ID: "?rotation-fixture-account"?$' "$decrypted" ||
                 die "$label YAML account changed during rotation"
-            grep -Eq '^[[:space:]]+B2_ACCOUNT_KEY: "?rotation-fixture-key"?$' "$decrypted" ||
+            grep -Eq "^[[:space:]]+$b2_account_key_label: \"?rotation-fixture-key\"?$" "$decrypted" ||
                 die "$label YAML account key changed during rotation"
             grep -Eq '^[[:space:]]+RESTIC_REPOSITORY: "?rotation-fixture-repository"?$' "$decrypted" ||
                 die "$label YAML repository changed during rotation"
-            grep -Eq '^[[:space:]]+RESTIC_PASSWORD: "?rotation-fixture-password"?$' "$decrypted" ||
+            grep -Eq "^[[:space:]]+$restic_password_label: \"?rotation-fixture-password\"?$" "$decrypted" ||
                 die "$label YAML password changed during rotation"
             ;;
         *)

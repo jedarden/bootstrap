@@ -267,6 +267,10 @@ require_signing_key() {
 }
 
 manifest_artifacts() {
+    # bootstrap.sh is the documented current download as well as the source
+    # from which the versioned archive is created. Keep its own digest in the
+    # signed manifest; check_versions separately requires it to be byte-for-
+    # byte identical to the current release archive.
     printf '%s\n' \
         'bootstrap.sh' \
         'start.sh' \

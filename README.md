@@ -53,9 +53,13 @@ ARTIFACT_SIGNING_KEY=/secure/path/bootstrap-artifacts-signing.pem \
 
 Each host directory publishes `artifact-manifest.txt` and its detached
 `artifact-manifest.sig`. The manifest is signed with the pinned public key in
-`hosts/ex44/keys/bootstrap-artifacts-signing.pub` and binds the launcher,
-bootstrap archives, version marker, and SSH public keys to SHA-256 digests.
-Release signing keys are operator-held; never add one to the repository.
+`hosts/ex44/keys/bootstrap-artifacts-signing.pub` and binds the documented
+current `bootstrap.sh`, every immutable bootstrap archive, the launcher,
+version marker, and SSH public keys to SHA-256 digests. The release helper also
+requires the current `bootstrap.sh` to be byte-for-byte identical to
+`bootstrap-<version>.sh`, so either published bootstrap path is authenticated
+by the same signed release entry. Release signing keys are operator-held; never
+add one to the repository.
 For a new host lineage or the first signing release, follow the
 [initial trust-anchor provisioning runbook](./docs/security/artifact-signing.md)
 before publishing any artifact.
@@ -149,6 +153,19 @@ keys, and every generated `start.sh`; a piped install is rejected. On an
 offline, malformed, stale, unsigned, or digest-mismatched response, bootstrap
 stops before trusting the artifact. `start.sh` keeps the existing launcher and
 continues to the selected agent when its update check fails.
+
+The current `bootstrap.sh` is not an unsigned convenience copy. Its
+`artifact=bootstrap.sh` digest is covered by the detached signature, and each
+release check requires it to equal the signed versioned archive. A consumer
+that downloads the current path should verify both entries and the equality
+before execution:
+
+```bash
+curl -fsSLo bootstrap.sh "$base/bootstrap.sh"
+awk -v file=bootstrap.sh '$1 == "artifact=" file {print $2 "  " file}' \
+  artifact-manifest.txt | sha256sum -c -
+cmp -s bootstrap.sh "bootstrap-$version.sh"
+```
 
 ### Signing-key rotation
 

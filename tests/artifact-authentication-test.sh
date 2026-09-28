@@ -49,6 +49,9 @@ assert_manifest_coverage() {
     cmp -s "$expected" "$actual" || fail 'manifest artifact coverage is incomplete or unexpected'
 }
 
+cmp -s "$HOST_DIR/bootstrap.sh" "$HOST_DIR/bootstrap-1.3.1.sh" ||
+    fail 'current bootstrap.sh is not the signed release archive'
+
 signature_bin="$TMP/manifest.sig.bin"
 sed -n 's/^signature=//p' "$SIGNATURE" | base64 --decode > "$signature_bin" 2>/dev/null ||
     fail 'committed artifact signature encoding is invalid'
@@ -83,6 +86,9 @@ cp "$HOST_DIR/bootstrap.sh" "$TMP/tampered-bootstrap.sh"
 printf '%s\n' '# offline tamper fixture' >> "$TMP/tampered-bootstrap.sh"
 if [[ "$(sha256sum "$TMP/tampered-bootstrap.sh" | awk '{print $1}')" == "$(manifest_hash bootstrap.sh)" ]]; then
     fail 'tampered bootstrap unexpectedly retained its signed digest'
+fi
+if cmp -s "$TMP/tampered-bootstrap.sh" "$HOST_DIR/bootstrap-1.3.1.sh"; then
+    fail 'tampered current bootstrap unexpectedly matched the signed archive'
 fi
 
 cp "$HOST_DIR/bootstrap-1.1.6.sh" "$TMP/stale-bootstrap.sh"

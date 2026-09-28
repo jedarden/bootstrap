@@ -226,6 +226,7 @@ download_release() {
     local base=$1 version=$2 destination=$3 filename
     mkdir -p "$destination/keys"
     for filename in \
+        bootstrap.sh \
         "bootstrap-$version.sh" \
         artifact-manifest.txt \
         artifact-manifest.sig \
@@ -240,7 +241,7 @@ download_release() {
 
 verify_downloaded_release() {
     local base=$1 version=$2 destination=$3
-    local signature_bin expected actual downloaded_fingerprint
+    local signature_bin expected actual current_expected current_actual downloaded_fingerprint
     local manifest_key signature_key
 
     rm -rf "$destination"
@@ -275,6 +276,14 @@ verify_downloaded_release() {
     actual=$(sha256sum "$destination/bootstrap-$version.sh" | awk '{print $1}')
     [[ "$actual" == "$expected" ]] || return 1
     bash -n "$destination/bootstrap-$version.sh"
+
+    current_expected=$(awk '$1 == "artifact=bootstrap.sh" {print $2}' \
+        "$destination/artifact-manifest.txt")
+    [[ "$current_expected" =~ ^[0-9a-f]{64}$ ]] || return 1
+    current_actual=$(sha256sum "$destination/bootstrap.sh" | awk '{print $1}')
+    [[ "$current_actual" == "$current_expected" ]] || return 1
+    cmp -s "$destination/bootstrap.sh" "$destination/bootstrap-$version.sh" || return 1
+    bash -n "$destination/bootstrap.sh"
 }
 
 PINNED_FINGERPRINT=$(openssl pkey -pubin \
@@ -290,6 +299,15 @@ if verify_downloaded_release "$RAW_BASE/tampered/hosts/ex44" "$RELEASE_VERSION" 
     fail 'tampered archive passed raw-HTTPS verification'
 fi
 [[ ! -e "$MUTATION_MARKER" ]] || fail 'tampered artifact changed the host before verification failed'
+
+cp -a "$RAW_ROOT/release" "$RAW_ROOT/current-tampered"
+printf '# tampered current bootstrap\n' >> \
+    "$RAW_ROOT/current-tampered/hosts/ex44/bootstrap.sh"
+if verify_downloaded_release "$RAW_BASE/current-tampered/hosts/ex44" "$RELEASE_VERSION" \
+    "$TMP/current-tampered-download" >/dev/null 2>&1; then
+    fail 'tampered current bootstrap passed raw-HTTPS verification'
+fi
+[[ ! -e "$MUTATION_MARKER" ]] || fail 'tampered current bootstrap changed the host before verification failed'
 
 cp -a "$RAW_ROOT/release" "$RAW_ROOT/manifest-tampered"
 sed -i 's/^version=1\.3\.2$/version=9.9.9/' \
@@ -318,6 +336,8 @@ sync_verified_source() {
     rm -rf "$VERIFIED_REPO"
     mkdir -p "$VERIFIED_REPO"
     cp -a "$FIXTURE/hosts" "$VERIFIED_REPO/"
+    cp -p "$download_dir/bootstrap.sh" \
+        "$VERIFIED_REPO/hosts/ex44/"
     cp -p "$download_dir/bootstrap-$version.sh" \
         "$VERIFIED_REPO/hosts/ex44/"
     cp -p "$download_dir/artifact-manifest.txt" \

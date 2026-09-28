@@ -162,8 +162,9 @@ a root shell.
    curl -fsSLo artifact-manifest.txt "$base/artifact-manifest.txt"
    curl -fsSLo artifact-manifest.sig "$base/artifact-manifest.sig"
    curl -fsSLo bootstrap-artifacts-signing.pub "$base/keys/bootstrap-artifacts-signing.pub"
-   # Verify the fingerprint, detached signature, and archive digest from
-   # ../../README.md#artifact-authentication before this step.
+   curl -fsSLo bootstrap.sh "$base/bootstrap.sh"
+   # Verify the fingerprint, detached signature, both bootstrap digests, and
+   # their exact equality from ../../README.md#artifact-authentication.
    chmod +x "bootstrap-$version.sh"
    ./"bootstrap-$version.sh"
    ```
@@ -259,9 +260,12 @@ will fail.
 
 ### Artifact verification and failure behavior
 
-The bootstrap refuses an unverified pipe invocation and verifies its own
-immutable archive, the fetched SSH keys, and every generated `start.sh` against
-the signed manifest before trusting them. The launcher fetches the signed
+The bootstrap refuses an unverified pipe invocation and verifies its current
+`bootstrap.sh`/immutable archive binding, the fetched SSH keys, and every
+generated `start.sh` against the signed manifest before trusting them. The
+manifest has a separate signed digest for `bootstrap.sh`, while release
+generation requires it to be byte-for-byte identical to
+`bootstrap-<version>.sh`. The launcher fetches the signed
 manifest before checking for an update, then requires the signed SHA-256 of the
 payload, its internal version, valid Bash syntax, and an atomic same-directory
 replacement. A missing, stale, tampered, malformed, or unsigned response keeps

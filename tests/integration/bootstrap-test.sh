@@ -333,6 +333,19 @@ assert_runtime_secret_hygiene() {
     fi
 }
 
+assert_no_age_identity_material() {
+    local description=$1
+    assert_container "$description" '
+        private_key_marker="AGE-SECRET-""KEY-"
+        while IFS= read -r -d "" path; do
+            if grep -Fq -- "$private_key_marker" "$path"; then
+                exit 1
+            fi
+        done < <(find /etc /root /home /tmp /run /var/lib/bootstrap-test \
+            -xdev -type f -print0)
+    '
+}
+
 assert_count() {
     local description=$1
     local expected=$2
@@ -619,6 +632,8 @@ assert_container 'interactive bootstrap does not copy SOPS or age input files' \
     '! find /etc /root /home /tmp /run /var/lib/bootstrap-test -xdev -type f \
          \( -name "*.sops.env" -o -name "*.sops.yml" -o -name "keys.txt" \) \
          -print -quit | grep -q .'
+assert_no_age_identity_material \
+    'interactive bootstrap does not copy arbitrary age private identities'
 assert_container 'rootless Docker prerequisites are installed' \
     'grep -Eq "apt-get.*uidmap.*dbus-user-session.*fuse-overlayfs.*rootlesskit.*slirp4netns" /var/lib/bootstrap-test/commands.log'
 assert_container 'rootless Docker has a subuid range' \
@@ -761,6 +776,8 @@ assert_container 'SOPS ciphertext and age identity files are absent from the hos
     '! find /etc /root /home /tmp /run /var/lib/bootstrap-test -xdev -type f \
          \( -name "*.sops.env" -o -name "*.sops.yml" -o -name "keys.txt" \) \
          -print -quit | grep -q .'
+assert_no_age_identity_material \
+    'SOPS bootstrap keeps the operator age private identity outside the host'
 
 first_snapshot=$(docker exec "$CONTAINER" /usr/local/bin/bootstrap-test-snapshot)
 
@@ -819,6 +836,13 @@ assert_output_excludes 'OpenBao restic password is not printed' \
     "$TMP/openbao-output" "$openbao_restic_password"
 assert_container 'OpenBao request uses the documented KV-v2 GET path' \
     "grep -Eq '^GET /v1/secret/bootstrap/[^/]+/b2$' /var/lib/bootstrap-test/openbao-requests.log"
+assert_container 'bootstrap never writes an age identity to OpenBao' \
+    '! grep -Eq "^(POST|PUT|PATCH|DELETE) " /var/lib/bootstrap-test/openbao-requests.log'
+assert_container 'OpenBao requests contain no age private identity material' \
+    'private_key_marker="AGE-SECRET-""KEY-"; \
+     ! grep -Fq -- "$private_key_marker" /var/lib/bootstrap-test/openbao-requests.log'
+assert_no_age_identity_material \
+    'OpenBao bootstrap path keeps age private identities outside the host'
 assert_container 'OpenBao request passed the private token header contract' \
     'test -f /var/lib/bootstrap-test/openbao-api-contract-ok'
 assert_container 'OpenBao token header file is removed after the read' \

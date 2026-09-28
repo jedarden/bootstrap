@@ -208,13 +208,13 @@ CLAUDE_INSTALL
                             ;;
                     esac
                 done
+                printf '%s %s\n' "${method:-<missing>}" "${url#https://traefik-rs-manager:8200}" >> "$state/openbao-requests.log"
                 [[ "$method" == GET && "$header_reference" == @* ]] || exit 22
                 header_path=${header_reference#@}
                 [[ -f "$header_path" ]] || exit 22
                 printf '%s\n' "$header_path" > "$state/openbao-last-header-path"
                 stat -c '%a' "$header_path" > "$state/openbao-header-mode"
                 [[ "$(cat "$header_path")" == "X-Vault-Token: ${BOOTSTRAP_TEST_OPENBAO_EXPECTED_TOKEN:-}" ]] || exit 22
-                printf 'GET %s\n' "${url#https://traefik-rs-manager:8200}" >> "$state/openbao-requests.log"
                 case "${BOOTSTRAP_TEST_OPENBAO_MODE:-unavailable}" in
                     complete)
                         printf '{"data":{"data":{"b2_application_key":"%s","restic_password":"%s"}}}\n' \

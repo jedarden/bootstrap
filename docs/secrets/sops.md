@@ -378,6 +378,7 @@ bash -n hosts/ex44/bootstrap.sh
 scripts/definition-of-done.sh --fast
 tests/sops-age-tooling-test.sh
 tests/sops-environment-boundary-test.sh
+tests/sops-operator-boundary-test.sh
 tests/sops-recovery-drill.sh
 tests/ansible-sops-workflow-test.sh
 ```
@@ -393,6 +394,10 @@ additionally proves that the offline identity is available with safe
 permissions and still decrypts both real file formats after the primary path
 is isolated. The clean-extraction definition-of-done run must also pass before
 pushing the change.
+The operator-boundary test checks the committed bootstrap artifact for
+SOPS/age installation or OpenBao write paths, and the container acceptance
+test scans the provisioned host for age private-identity material regardless of
+its filename.
 The Ansible workflow test uses disposable SOPS and Ansible stubs to verify
 the FIFO command contract, cleanup after both success and failure, the
 required mode-0600 runtime destination, and the absence of ordinary

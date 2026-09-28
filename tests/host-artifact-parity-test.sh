@@ -24,6 +24,14 @@ expect_failure() {
     fi
 }
 
+expect_failure_all_views() {
+    local mode
+    for mode in --live --staged; do
+        expect_failure "$mode"
+        expect_failure "$mode" --allow-split
+    done
+}
+
 write_lab_manifest() {
     local manifest="$FIXTURE/hosts/lab/artifact-manifest.txt"
     local signature="$FIXTURE/hosts/lab/artifact-manifest.sig"
@@ -113,27 +121,59 @@ echo 'Checking that staged validation ignores an unstaged lab drift...'
 printf '# unstaged drift\n' >> "$FIXTURE/hosts/lab/start.sh"
 run_check --staged
 expect_failure --live
+expect_failure --live --allow-split
 cp -p "$TMP/lab-start-good.sh" "$FIXTURE/hosts/lab/start.sh"
 
-echo 'Checking missing required artifacts and archive metadata...'
+echo 'Checking syntax validation with and without the backwards-compatible flag...'
+printf 'if [\n' >> "$FIXTURE/hosts/lab/start.sh"
+git -C "$FIXTURE" add hosts/lab/start.sh
+expect_failure_all_views
+cp -p "$TMP/lab-start-good.sh" "$FIXTURE/hosts/lab/start.sh"
+git -C "$FIXTURE" add hosts/lab/start.sh
+
+echo 'Checking version validation with and without the backwards-compatible flag...'
+printf '%s\n' '9.9.9' > "$FIXTURE/hosts/lab/start.sh.version"
+git -C "$FIXTURE" add hosts/lab/start.sh.version
+expect_failure_all_views
+printf '%s\n' '1.3.1' > "$FIXTURE/hosts/lab/start.sh.version"
+git -C "$FIXTURE" add hosts/lab/start.sh.version
+
+echo 'Checking required artifacts and archive validation with and without the backwards-compatible flag...'
 mv "$FIXTURE/hosts/lab/start.sh.version" "$TMP/lab-start.sh.version"
-expect_failure --live
+git -C "$FIXTURE" add hosts/lab/start.sh.version
+expect_failure_all_views
 mv "$TMP/lab-start.sh.version" "$FIXTURE/hosts/lab/start.sh.version"
+git -C "$FIXTURE" add hosts/lab/start.sh.version
 cp -p "$FIXTURE/hosts/lab/bootstrap-1.3.1.sh" "$TMP/lab-archive.sh"
 sed -i '0,/^# Version: 1\.3\.1$/s//\# Version: 9.9.9/' \
     "$FIXTURE/hosts/lab/bootstrap-1.3.1.sh"
-expect_failure --live
+git -C "$FIXTURE" add hosts/lab/bootstrap-1.3.1.sh
+expect_failure_all_views
 mv "$TMP/lab-archive.sh" "$FIXTURE/hosts/lab/bootstrap-1.3.1.sh"
+git -C "$FIXTURE" add hosts/lab/bootstrap-1.3.1.sh
 
-echo 'Checking missing README host links...'
+echo 'Checking embedded-launcher validation with and without the backwards-compatible flag...'
+cp -p "$FIXTURE/hosts/lab/bootstrap.sh" "$TMP/lab-bootstrap.sh"
+sed -i '0,/^# start\.sh - Tmux + coding-agent launcher with self-update$/s//\# start.sh - Tmux + coding-agent launcher with embedded drift/' \
+    "$FIXTURE/hosts/lab/bootstrap.sh"
+git -C "$FIXTURE" add hosts/lab/bootstrap.sh
+expect_failure_all_views
+mv "$TMP/lab-bootstrap.sh" "$FIXTURE/hosts/lab/bootstrap.sh"
+git -C "$FIXTURE" add hosts/lab/bootstrap.sh
+
+echo 'Checking README-link validation with and without the backwards-compatible flag...'
 cp -p "$FIXTURE/README.md" "$TMP/README.md"
 sed -i '\|./hosts/lab/|d' "$FIXTURE/README.md"
-expect_failure --live
+git -C "$FIXTURE" add README.md
+expect_failure_all_views
 mv "$TMP/README.md" "$FIXTURE/README.md"
+git -C "$FIXTURE" add README.md
 cp -p "$FIXTURE/README.md" "$TMP/README.md"
 sed -i 's|./hosts/lab/|./hosts/lab/missing/|' "$FIXTURE/README.md"
-expect_failure --live
+git -C "$FIXTURE" add README.md
+expect_failure_all_views
 mv "$TMP/README.md" "$FIXTURE/README.md"
+git -C "$FIXTURE" add README.md
 
 echo 'Checking manifest coverage, digest, and signature failures...'
 mv "$FIXTURE/hosts/lab/keys/jedarden.pub" "$TMP/lab-jedarden.pub"

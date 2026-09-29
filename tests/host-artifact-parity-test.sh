@@ -129,7 +129,20 @@ printf 'if [\n' >> "$FIXTURE/hosts/lab/start.sh"
 git -C "$FIXTURE" add hosts/lab/start.sh
 expect_failure_all_views
 cp -p "$TMP/lab-start-good.sh" "$FIXTURE/hosts/lab/start.sh"
+# The worktree is valid again, but the index still contains the malformed
+# staged version until the good worktree copy is explicitly staged.
+run_check --live
+expect_failure --staged
 git -C "$FIXTURE" add hosts/lab/start.sh
+
+echo 'Checking that an incomplete staged release set is not hidden by a valid worktree...'
+mv "$FIXTURE/hosts/lab/bootstrap-1.3.1.sh" "$TMP/lab-current-archive-good.sh"
+git -C "$FIXTURE" add -u -- hosts/lab/bootstrap-1.3.1.sh
+mv "$TMP/lab-current-archive-good.sh" "$FIXTURE/hosts/lab/bootstrap-1.3.1.sh"
+run_check --live
+expect_failure --staged
+git -C "$FIXTURE" add hosts/lab/bootstrap-1.3.1.sh
+run_check --staged
 
 echo 'Checking version validation with and without the backwards-compatible flag...'
 printf '%s\n' '9.9.9' > "$FIXTURE/hosts/lab/start.sh.version"

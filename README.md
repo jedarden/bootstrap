@@ -125,6 +125,13 @@ Forgejo state through GitHub and its raw artifacts:
 ./scripts/start-sh-release.sh distribution-check
 ```
 
+Validate the release, security, and SOPS runbooks against the current scripts,
+paths, links, and command interfaces:
+
+```bash
+./scripts/check-documentation.sh
+```
+
 Run the local self-update regression suite without contacting the network:
 
 ```bash

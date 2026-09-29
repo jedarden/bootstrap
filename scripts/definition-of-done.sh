@@ -32,6 +32,8 @@ case "${1:-}" in
         bash -n "$ROOT/tests/artifact-secret-leakage-test.sh"
         bash -n "$ROOT/scripts/check-secret-leakage.sh"
         bash -n "$ROOT/scripts/check-sops-contract.sh"
+        bash -n "$ROOT/scripts/check-documentation.sh"
+        bash -n "$ROOT/tests/documentation-reference-test.sh"
         bash -n "$ROOT/ansible/run-drift.sh"
         bash -n "$ROOT/tests/ansible-drift-acceptance-test.sh"
         bash -n "$ROOT/tests/secrets-gitignore-test.sh"
@@ -69,6 +71,8 @@ case "${1:-}" in
         "$ROOT/tests/artifact-secret-leakage-test.sh"
         "$ROOT/scripts/check-secret-leakage.sh" --tracked --artifacts
         "$ROOT/scripts/check-sops-contract.sh"
+        "$ROOT/scripts/check-documentation.sh"
+        "$ROOT/tests/documentation-reference-test.sh"
         "$ROOT/tests/secrets-gitignore-test.sh"
         "$ROOT/tests/ansible-sops-workflow-test.sh"
         "$ROOT/tests/sops-contract-test.sh"

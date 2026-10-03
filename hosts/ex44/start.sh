@@ -13,16 +13,11 @@
 # into every pane herdr spawns) or an existing tmux client ($TMUX) - it skips
 # tmux entirely and execs the agent in the current pane instead of nesting.
 #
-# This file is the single canonical copy. bootstrap.sh embeds a byte-for-byte
-# copy of it in a heredoc (Step 13) so freshly-bootstrapped hosts get it on
-# first run; every host's copy self-updates from this file afterward (see
-# check_for_self_update below). Never hand-edit a deployed ~/start.sh on a
-# host and never edit only one of the two copies in this repo - run
-# hosts/ex44/sync-start-sh.sh after any change here to regenerate
-# bootstrap.sh's embedded copy, then commit both together. See
-# docs/plan/plan.md ADR-1 for why (a hand-patched host copy and a corrupted
-# embedded copy both went undetected in the wild before this rule existed).
-START_SH_VERSION="1.3.2"
+# Canonical source: git.ardenone.com/jedarden/harnessctl.
+# Releases are signed by OpenBao Transit and distributed through the read-only
+# GitHub mirror. Install a deployed copy with install.sh; update it with
+# `start update`. Bootstrap's launcher is a compatibility snapshot.
+START_SH_VERSION="1.3.3"
 REPO_URL="https://raw.githubusercontent.com/jedarden/bootstrap/main/hosts/ex44"
 ARTIFACT_MANIFEST_FILE="artifact-manifest.txt"
 ARTIFACT_SIGNATURE_FILE="artifact-manifest.sig"
@@ -44,9 +39,17 @@ ARTIFACT_KEY
 ARTIFACT_TRUSTED_KEY_IDS=("$ARTIFACT_TRUSTED_KEY_ID")
 ARTIFACT_TRUSTED_PUBLIC_KEYS=("$ARTIFACT_TRUSTED_PUBLIC_KEY")
 
+# Only the user's own configuration is sourced. Values can also be exported
+# directly by the calling shell. The default preserves the fleet's behavior.
+START_SH_CONFIG="${START_SH_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/harnessctl/config.sh}"
+[[ ! -f "$START_SH_CONFIG" ]] || source "$START_SH_CONFIG"
+UPDATE_REPO_URL="${START_SH_UPDATE_URL:-https://raw.githubusercontent.com/jedarden/harnessctl/main}"
+
 usage() {
     cat <<'USAGE'
-Usage: start [claude|codex] [--agent claude|codex] [--resume <session>] [--no-update] [--version] [--help]
+Usage: start [claude|codex] [--agent claude|codex] [--resume <session>] [--no-update] [--no-agent-update]
+       start update
+       start --version | --help
 
   claude | codex   Coding agent to launch, e.g. `start codex`. Equivalent to
                    --agent <name>; giving both with different values is an error.
@@ -58,6 +61,9 @@ Usage: start [claude|codex] [--agent claude|codex] [--resume <session>] [--no-up
   --resume <id>    Resume the named session. Translates to `claude --resume
                    <id>` or `codex resume <id>` for the selected agent.
   --no-update      Skip the start self-update check.
+  --no-agent-update
+                   Use the installed agent without installing or updating it.
+  update           Update only the launcher; do not launch or update an agent.
   --version, -v    Print the start version and exit.
   --help, -h       Show this help and exit.
 USAGE
@@ -68,6 +74,8 @@ USAGE
 ORIGINAL_ARGS=("$@")
 
 SKIP_UPDATE=false
+SKIP_AGENT_UPDATE=false
+UPDATE_ONLY=false
 AGENT=""
 POSITIONAL_AGENT=""
 RESUME_SESSION=""
@@ -84,6 +92,14 @@ while [[ $# -gt 0 ]]; do
             ;;
         --no-update)
             SKIP_UPDATE=true
+            shift
+            ;;
+        --no-agent-update)
+            SKIP_AGENT_UPDATE=true
+            shift
+            ;;
+        update)
+            UPDATE_ONLY=true
             shift
             ;;
         --agent)
@@ -135,6 +151,11 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+if $UPDATE_ONLY && [[ -n "$AGENT$POSITIONAL_AGENT$RESUME_SESSION" ]]; then
+    echo "Error: start update cannot be combined with an agent or resume session" >&2
+    exit 1
+fi
+
 if [[ -n "$POSITIONAL_AGENT" ]]; then
     if [[ -n "$AGENT" && "$AGENT" != "$POSITIONAL_AGENT" ]]; then
         echo "Error: conflicting agents: '$POSITIONAL_AGENT' and --agent '$AGENT'" >&2
@@ -151,8 +172,9 @@ SELF_PATH="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || true)"
 [[ -n "$SELF_PATH" ]] || SELF_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 SCRIPT_DIR="$(dirname "$SELF_PATH")"
 TMUX_DIR="$SCRIPT_DIR/.tmux"
-TMUX_CONF="$TMUX_DIR/tmux.conf"
+TMUX_CONF="${START_SH_TMUX_CONF:-$TMUX_DIR/tmux.conf}"
 TPM_DIR="$TMUX_DIR/plugins/tpm"
+START_SH_WORKDIR="${START_SH_WORKDIR:-$SCRIPT_DIR}"
 
 # Verify a signed release manifest fetched from the raw distribution path.
 # The public key is embedded in this launcher so a compromised or stale raw
@@ -167,8 +189,8 @@ verify_artifact_manifest() {
     command -v openssl >/dev/null 2>&1 || return 1
     command -v base64 >/dev/null 2>&1 || return 1
     command -v sha256sum >/dev/null 2>&1 || return 1
-    curl -sfL "$REPO_URL/$ARTIFACT_MANIFEST_FILE" > "$manifest" 2>/dev/null || return 1
-    curl -sfL "$REPO_URL/$ARTIFACT_SIGNATURE_FILE" > "$signature" 2>/dev/null || return 1
+    curl -sfL --connect-timeout 5 --max-time 20 "$UPDATE_REPO_URL/$ARTIFACT_MANIFEST_FILE" > "$manifest" 2>/dev/null || return 1
+    curl -sfL --connect-timeout 5 --max-time 20 "$UPDATE_REPO_URL/$ARTIFACT_SIGNATURE_FILE" > "$signature" 2>/dev/null || return 1
     mapfile -t key_ids < <(grep -E '^key_id=[A-Za-z0-9._-]+$' "$manifest" || true)
     [[ ${#key_ids[@]} -eq 1 ]] || return 1
     key_id=${key_ids[0]#key_id=}
@@ -192,6 +214,7 @@ verify_artifact_manifest() {
     printf '%s' "$signature_value" | base64 --decode > "$directory/signature.bin" 2>/dev/null || return 1
     openssl dgst -sha256 -verify "$public_key" -signature "$directory/signature.bin" "$manifest" >/dev/null 2>&1 || return 1
 
+    [[ "$(sed -n 's/^format=//p' "$manifest")" == "harnessctl-artifacts-v1" ]] || return 1
     mapfile -t manifest_versions < <(grep -E '^version=[0-9]+\.[0-9]+\.[0-9]+$' "$manifest" || true)
     [[ ${#manifest_versions[@]} -eq 1 ]] || return 1
     manifest_version=${manifest_versions[0]#version=}
@@ -225,12 +248,20 @@ check_for_self_update() {
         return 0
     fi
 
+    # A source checkout must never be replaced by the updater.
+    if command -v git >/dev/null 2>&1 &&
+        git -C "$SCRIPT_DIR" ls-files --error-unmatch "$(basename "$SELF_PATH")" >/dev/null 2>&1; then
+        echo "Note: source checkout detected; install a deployed copy to self-update." >&2
+        $UPDATE_ONLY && return 1
+        return 0
+    fi
+
     local manifest_dir remote_version new_script
-    manifest_dir=$(mktemp -d "${SELF_PATH}.manifest.XXXXXX") || return 0
+    manifest_dir=$(mktemp -d "${SELF_PATH}.manifest.XXXXXX") || return 1
     if ! remote_version=$(verify_artifact_manifest "$manifest_dir"); then
         echo "Warning: release manifest verification failed; keeping current start.sh $START_SH_VERSION" >&2
         rm -rf "$manifest_dir"
-        return 0
+        return 1
     fi
 
     # Compare versions
@@ -242,16 +273,16 @@ check_for_self_update() {
             new_script=$(mktemp "${SELF_PATH}.tmp.XXXXXX") || {
                 echo "Warning: could not create a temporary start.sh update, keeping current version $START_SH_VERSION" >&2
                 rm -rf "$manifest_dir"
-                return 0
+                return 1
             }
 
             # Fetch beside the deployed launcher so the final rename is an
             # atomic replacement on the same filesystem. Never stream a
             # remote response directly into the working launcher.
-            if ! curl -sfL "$REPO_URL/start.sh" > "$new_script" 2>/dev/null; then
+            if ! curl -sfL --connect-timeout 5 --max-time 20 "$UPDATE_REPO_URL/start.sh" > "$new_script" 2>/dev/null; then
                 rm -f "$new_script"
                 rm -rf "$manifest_dir"
-                return 0
+                return 1
             fi
 
             # Require the signed manifest hash and the payload's own version
@@ -262,14 +293,14 @@ check_for_self_update() {
                 echo "Warning: fetched start.sh failed authenticity, integrity, or syntax checks; keeping current version $START_SH_VERSION" >&2
                 rm -f "$new_script"
                 rm -rf "$manifest_dir"
-                return 0
+                return 1
             fi
 
             if ! chmod +x "$new_script" || ! mv -f "$new_script" "$SELF_PATH"; then
                 echo "Warning: could not install fetched start.sh, keeping current version $START_SH_VERSION" >&2
                 rm -f "$new_script"
                 rm -rf "$manifest_dir"
-                return 0
+                return 1
             fi
 
             rm -rf "$manifest_dir"
@@ -281,7 +312,13 @@ check_for_self_update() {
     rm -rf "$manifest_dir"
 }
 
-check_for_self_update
+if ! check_for_self_update; then
+    $UPDATE_ONLY && exit 1
+fi
+if $UPDATE_ONLY; then
+    echo "start v${START_SH_VERSION}"
+    exit 0
+fi
 
 # Expose the deployed copy as the `start` command. Hosts bootstrapped before
 # this existed get the link here, on the first run after self-update lands it.
@@ -538,6 +575,14 @@ resolve_agent() {
 }
 
 check_and_update_agent() {
+    if $SKIP_AGENT_UPDATE; then
+        [[ ! -d "$HOME/.local/bin" ]] || export PATH="$HOME/.local/bin:$PATH"
+        if ! command -v "$AGENT" >/dev/null 2>&1; then
+            echo "Error: $AGENT is not installed (--no-agent-update was requested)" >&2
+            exit 1
+        fi
+        return 0
+    fi
     case "$AGENT" in
         claude) check_and_update_claude ;;
         codex)  check_and_update_codex ;;
@@ -548,19 +593,29 @@ check_and_update_agent() {
 # disabled, matching what this launcher has always done for Claude Code -
 # these are dedicated single-tenant boxes reached only over Tailscale.
 set_agent_argv() {
+    local permission_mode="${START_SH_PERMISSION_MODE:-bypass}"
+    case "$permission_mode" in
+        default|bypass) ;;
+        *) echo "Error: START_SH_PERMISSION_MODE must be default or bypass" >&2; exit 1 ;;
+    esac
     case "$AGENT" in
         claude)
-            AGENT_ARGV=(claude --dangerously-skip-permissions --model sonnet)
+            AGENT_ARGV=(claude)
+            [[ "$permission_mode" != bypass ]] || AGENT_ARGV+=(--dangerously-skip-permissions)
+            AGENT_ARGV+=(--model "${START_SH_CLAUDE_MODEL:-sonnet}")
             if [[ -n "$RESUME_SESSION" ]]; then
                 AGENT_ARGV+=(--resume "$RESUME_SESSION")
             fi
             ;;
         codex)
             if [[ -n "$RESUME_SESSION" ]]; then
-                AGENT_ARGV=(codex resume --dangerously-bypass-approvals-and-sandbox "$RESUME_SESSION")
+                AGENT_ARGV=(codex resume)
             else
-                AGENT_ARGV=(codex --dangerously-bypass-approvals-and-sandbox)
+                AGENT_ARGV=(codex)
             fi
+            [[ "$permission_mode" != bypass ]] || AGENT_ARGV+=(--dangerously-bypass-approvals-and-sandbox)
+            [[ -z "${START_SH_CODEX_MODEL:-}" ]] || AGENT_ARGV+=(--model "$START_SH_CODEX_MODEL")
+            [[ -z "$RESUME_SESSION" ]] || AGENT_ARGV+=("$RESUME_SESSION")
             ;;
     esac
 }
@@ -666,7 +721,7 @@ fi
 
 # Create the tmux session with our config and start the selected agent
 echo "Creating tmux session: $SESSION_NAME (agent: $AGENT)"
-tmux -f "$TMUX_CONF" new-session -d -s "$SESSION_NAME" -c "$SCRIPT_DIR"
+tmux -f "$TMUX_CONF" new-session -d -s "$SESSION_NAME" -c "$START_SH_WORKDIR"
 
 # Protect the tmux server from the OOM killer: on memory exhaustion the kernel
 # should kill a claude worker pane, not the server (killing the server takes

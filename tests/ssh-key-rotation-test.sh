@@ -193,11 +193,28 @@ cp -p \
     "$ROOT/hosts/ex44/start.sh.version" \
     "$ROOT/hosts/ex44/sync-start-sh.sh" \
     "$FIXTURE/hosts/ex44/"
-cp -p "$ROOT"/hosts/ex44/bootstrap-*.sh "$FIXTURE/hosts/ex44/"
+cp -p \
+    "$ROOT/hosts/ex44/bootstrap-1.1.6.sh" \
+    "$ROOT/hosts/ex44/bootstrap-1.3.1.sh" \
+    "$FIXTURE/hosts/ex44/"
 cp -p "$ROOT/hosts/ex44/keys/"*.pub "$HOST_DIR/keys/"
 cp -p "$STABLE_PUBLIC" "$HOST_DIR/keys/jedarden.pub"
 cp -p "$ROTATING_OLD_PUBLIC" "$HOST_DIR/keys/jeda-mbp.pub"
 cp -p "$SIGNING_DIR/public.pem" "$HOST_DIR/keys/bootstrap-artifacts-signing.pub"
+
+# Keep this disposable scenario anchored at its declared 1.3.1 baseline even
+# when the real checkout has advanced. The rotation under test then creates
+# 1.3.2 rather than colliding with a copied current-release archive.
+sed -i \
+    's/^START_SH_VERSION="[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*"$/START_SH_VERSION="1.3.1"/' \
+    "$HOST_DIR/start.sh"
+sed -i \
+    -e 's/^# Version: [0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*$/# Version: 1.3.1/' \
+    -e 's/bootstrap-[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\.sh/bootstrap-1.3.1.sh/g' \
+    -e 's/^VERSION="[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*"$/VERSION="1.3.1"/' \
+    -e 's/^START_SH_VERSION="[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*"$/START_SH_VERSION="1.3.1"/' \
+    "$HOST_DIR/bootstrap.sh"
+printf '%s\n' '1.3.1' > "$HOST_DIR/start.sh.version"
 
 # The disposable fixture gets its own artifact trust anchor. Synchronization
 # must update both the top-level verifier and embedded launcher before either

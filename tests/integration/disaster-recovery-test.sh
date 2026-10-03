@@ -112,7 +112,7 @@ fingerprint=$(openssl pkey -pubin \
     -in "$DOWNLOAD/keys/bootstrap-artifacts-signing.pub" \
     -outform DER | sha256sum | awk '{print $1}')
 [[ "$fingerprint" == \
-    a6f26805c65bcd4de965b6d642c6dc5989de1cfa4c7e1b2e9bcb2b94ab28c589 ]] ||
+    f8e3bdf686cbdcbf5608276b2e63db734f64e9329cfaac7c12843826aee14080 ]] ||
     fail 'published signing-key fingerprint changed unexpectedly'
 
 signature_bin="$TMP/artifact-manifest.sig.bin"

@@ -107,9 +107,26 @@ cp -p \
     "$ROOT/hosts/ex44/artifact-manifest.txt" \
     "$ROOT/hosts/ex44/artifact-manifest.sig" \
     "$FIXTURE/hosts/ex44/"
-cp -p "$ROOT"/hosts/ex44/bootstrap-*.sh "$FIXTURE/hosts/ex44/"
+cp -p \
+    "$ROOT/hosts/ex44/bootstrap-1.1.6.sh" \
+    "$ROOT/hosts/ex44/bootstrap-1.3.1.sh" \
+    "$FIXTURE/hosts/ex44/"
 cp -p "$ROOT"/hosts/ex44/keys/jedarden.pub "$FIXTURE/hosts/ex44/keys/"
 cp -p "$ROOT"/hosts/ex44/keys/jeda-mbp.pub "$FIXTURE/hosts/ex44/keys/"
+
+# Provisioning models a fixed unsigned 1.3.1 baseline followed by the first
+# signed 1.3.2 release. Normalize the disposable canonical files so newer real
+# releases do not collide with that scenario or copy future archives into it.
+sed -i \
+    's/^START_SH_VERSION="[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*"$/START_SH_VERSION="1.3.1"/' \
+    "$FIXTURE/hosts/ex44/start.sh"
+sed -i \
+    -e 's/^# Version: [0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*$/# Version: 1.3.1/' \
+    -e 's/bootstrap-[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\.sh/bootstrap-1.3.1.sh/g' \
+    -e 's/^VERSION="[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*"$/VERSION="1.3.1"/' \
+    -e 's/^START_SH_VERSION="[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*"$/START_SH_VERSION="1.3.1"/' \
+    "$FIXTURE/hosts/ex44/bootstrap.sh"
+printf '%s\n' '1.3.1' > "$FIXTURE/hosts/ex44/start.sh.version"
 
 echo 'Installing and checking the disposable pinned public key...'
 install -m 0644 "$PUBLIC_KEY" "$PINNED_KEY"
@@ -120,6 +137,7 @@ cmp -s "$PUBLIC_KEY" "$PINNED_KEY" || fail 'pinned public key differs from gener
 
 python3 - "$FIXTURE/hosts/ex44/start.sh" "$PUBLIC_KEY" "$KEY_ID" <<'PY'
 import pathlib
+import re
 import sys
 
 start_path = pathlib.Path(sys.argv[1])
@@ -133,10 +151,15 @@ start = text.index(begin)
 finish = text.index(end, start) + len(end)
 replacement = begin + public_key + end
 text = text[:start] + replacement + text[finish:]
-text = text.replace(
-    'ARTIFACT_TRUSTED_KEY_ID="bootstrap-rsa-2026-09"',
+text, count = re.subn(
+    r'^ARTIFACT_TRUSTED_KEY_ID="[A-Za-z0-9._-]+"$',
     f'ARTIFACT_TRUSTED_KEY_ID="{key_id}"',
+    text,
+    count=1,
+    flags=re.MULTILINE,
 )
+if count != 1:
+    raise SystemExit("could not replace the primary artifact key ID")
 start_path.write_text(text)
 PY
 

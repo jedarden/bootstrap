@@ -610,7 +610,9 @@ launches Codex with `--dangerously-bypass-approvals-and-sandbox`. The equivalent
 flag form is `start --agent claude|codex`. Selection order is the explicit
 positional or `--agent` value, `$START_SH_AGENT`, an interactive prompt, then
 `claude`; when stdin is not a TTY, the prompt is skipped and `claude` is the
-default. A positional agent that conflicts with `--agent` is rejected.
+default. A positional agent that conflicts with `--agent` is rejected. Add
+`--resume <session>` to continue the session ID printed when an agent exits;
+the launcher maps it to the selected agent's native resume syntax.
 
 On a bare shell, `start` creates the first available phonetic-alphabet tmux
 session, sends the selected agent command into it, and attaches. When it
@@ -624,6 +626,8 @@ start claude                  # explicit
 start codex
 start --agent codex           # same as `start codex`
 START_SH_AGENT=codex start
+start claude --resume 4dcb6804-7929-4ae4-92c6-cb0cc43b8290
+start codex --resume 019dbf76-c928-76b3-84b9-6d8b14fdb99c
 ```
 
 ## Recovery

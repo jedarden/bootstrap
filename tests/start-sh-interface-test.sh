@@ -130,7 +130,7 @@ run_start() {
         {
             export HOME="$CASE_HOME" PATH="$PATH_VALUE"
             export FAKE_TMUX_LOG FAKE_AGENT_LOG
-            unset TMUX START_SH_AGENT
+            unset TMUX START_SH_AGENT HERDR_PANE_ID
             if [[ "$herdr" == true ]]; then
                 export HERDR_ENV=start-interface-test
             else
@@ -156,7 +156,7 @@ run_invalid() {
         {
             export HOME="$CASE_HOME" PATH="$PATH_VALUE"
             export FAKE_TMUX_LOG FAKE_AGENT_LOG
-            unset TMUX HERDR_ENV START_SH_AGENT
+            unset TMUX HERDR_ENV HERDR_PANE_ID START_SH_AGENT
             hash -r
             start "$@" < /dev/null
         } 2>&1
@@ -201,15 +201,33 @@ assert_file_contains \
 assert_not_contains 'exec claude' "$(<"$FAKE_TMUX_LOG")" \
     'positional codex unexpectedly dispatched Claude'
 
+echo 'Checking resume dispatch and tmux-safe session quoting...'
+setup_case codex-resume-tmux
+run_start false codex --resume 'thread name; still-one-argument' --no-update
+assert_contains 'Creating tmux session: alpha (agent: codex)' \
+    "$CASE_OUTPUT" 'resumed Codex session did not select Codex'
+assert_file_contains \
+    'unset CLAUDECODE && exec codex resume --dangerously-bypass-approvals-and-sandbox thread\ name\;\ still-one-argument' \
+    "$FAKE_TMUX_LOG" 'Codex resume value was not safely sent through tmux'
+
 echo 'Checking direct agent execution inside a herdr pane...'
 setup_case codex-herdr
-run_start true codex --no-update
+run_start true codex --resume 019dbf76-c928-76b3-84b9-6d8b14fdb99c --no-update
 assert_contains 'Detected herdr pane unknown - skipping nested tmux session.' \
     "$CASE_OUTPUT" 'herdr pane was not detected'
-assert_contains 'codex <--dangerously-bypass-approvals-and-sandbox>' \
-    "$(<"$FAKE_AGENT_LOG")" 'selected agent was not executed directly'
+assert_contains \
+    'codex <resume> <--dangerously-bypass-approvals-and-sandbox> <019dbf76-c928-76b3-84b9-6d8b14fdb99c>' \
+    "$(<"$FAKE_AGENT_LOG")" 'Codex resume command was not executed directly'
 assert_file_not_exists "$FAKE_TMUX_LOG" \
     'herdr dispatch unexpectedly invoked tmux'
+
+setup_case claude-herdr
+run_start true claude --resume 4dcb6804-7929-4ae4-92c6-cb0cc43b8290 --no-update
+assert_contains \
+    'claude <--dangerously-skip-permissions> <--model> <sonnet> <--resume> <4dcb6804-7929-4ae4-92c6-cb0cc43b8290>' \
+    "$(<"$FAKE_AGENT_LOG")" 'Claude resume command was not executed directly'
+assert_file_not_exists "$FAKE_TMUX_LOG" \
+    'resumed Claude herdr dispatch unexpectedly invoked tmux'
 
 echo 'Checking invalid agent arguments...'
 run_invalid unknown-agent nope --no-update
@@ -229,5 +247,11 @@ assert_contains "Error: unsupported --agent 'llama' (expected claude or codex)" 
     "$CASE_OUTPUT" 'unsupported --agent value was accepted'
 assert_file_not_exists "$FAKE_TMUX_LOG" \
     'unsupported --agent value reached tmux'
+
+run_invalid missing-resume codex --resume --no-update
+assert_contains 'Error: --resume requires a session ID or name' \
+    "$CASE_OUTPUT" 'missing resume value was accepted'
+assert_file_not_exists "$FAKE_AGENT_LOG" \
+    'missing resume value reached an agent'
 
 echo 'start command interface regression tests passed.'

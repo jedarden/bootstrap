@@ -18,18 +18,18 @@ VERSION="1.3.1"
 
 ARTIFACT_MANIFEST_FILE="artifact-manifest.txt"
 ARTIFACT_SIGNATURE_FILE="artifact-manifest.sig"
-ARTIFACT_TRUSTED_KEY_ID="bootstrap-rsa-2026-09"
+ARTIFACT_TRUSTED_KEY_ID="bootstrap-rsa-2026-10"
 ARTIFACT_TRUSTED_PUBLIC_KEY=$(cat <<'ARTIFACT_KEY'
 -----BEGIN PUBLIC KEY-----
-MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAwPr9OxItnuDaKqI217+F
-MwfFegnkYy38n2GbZhQ3x9ipK+HtrV8qnCFGt4V0Kxwn+gmKrIt+RmAGyfyz2pyo
-fDd6N+bEfJb4gCCrNa4Am32fYKK6lCq4JCB9l5V8n+eLvyZnBQd3sRy06RpdD0YY
-Jr0C/DdJaGvIYs51XCRdTBqf/YCvbQuW2eXlAuFEc2dB0dO3C9G7na+JK/3AXeUH
-E83z52EBOIW1uuDMMX4oAu5bEmjdU4VjcqqU2+WqHBZJJrOb8COuEpEW+yURf4Ze
-5sSLPLIfqP+npOyeNBraMheHIZnFs3PwrYMyCfmuRdr8WUiPJcr8anapfOL5XoOp
-NdpuRrcP0t2i5WWCojaCNUZd3TasXtwO+WuoYVPqHTJVd6ISACaZG6i1t3d9igYS
-jZpB3JGdOIgwoj02h0wGvXqDj/O2R/lWQIPNrdgy6ROwcvbyzXzj1sYh6fW6Lr+c
-/5mOK+PTN3Pt9MrB+6/c4G3hIDtK+29TpZEVEhxbaeMJAgMBAAE=
+MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEApNHGqYPfKvRpLulWXS8c
+/VuKITatXEhDqrXY4/0ug9SqlZF8e/o3q6FVgbMqdRTniDOrhgx1mUcbzpFJ4Y6Z
+ILcYmIEXne12A2BxHh2SF+9uXBAbwNdlEIXunybhGT4te32UKGGqRN7TdFpr6KsN
+nSSNN2/WyvjL+ytqpa2KyguXkrGHSfwDdUDKDGYmL1eZHjhP2GrWxG6aI8EcMtfp
+mAy/NUXxL2tOB8bGz+IPfTsycwcDqZ0mw59vQUy2+nUTnG/xQpWud6SXPMuSJoJ9
+3tGGU24gz4vptPn7V/L3rGQp8Titgks0IxpwEXZV2T//wNEXBebGUGaoQfOrGSoC
+AzELsxvleqZOKRJyP55Djqh5iELC9tF9yxmCmRLxYwUzYPz234Wf2E0Qi1Vo386e
+VxyDwlCe9IIMEgejVkjseahaS5INmFjCoDjH7cZWY28MtTVy1u9/79n6wBkApJeQ
+7AuWeqPskkNYJz18R2aRjER6/Ru+2gyXw5fnD3RbpLfzAgMBAAE=
 -----END PUBLIC KEY-----
 ARTIFACT_KEY
 )
@@ -1442,18 +1442,18 @@ START_SH_VERSION="1.3.1"
 REPO_URL="https://raw.githubusercontent.com/jedarden/bootstrap/main/hosts/ex44"
 ARTIFACT_MANIFEST_FILE="artifact-manifest.txt"
 ARTIFACT_SIGNATURE_FILE="artifact-manifest.sig"
-ARTIFACT_TRUSTED_KEY_ID="bootstrap-rsa-2026-09"
+ARTIFACT_TRUSTED_KEY_ID="bootstrap-rsa-2026-10"
 ARTIFACT_TRUSTED_PUBLIC_KEY=$(cat <<'ARTIFACT_KEY'
 -----BEGIN PUBLIC KEY-----
-MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAwPr9OxItnuDaKqI217+F
-MwfFegnkYy38n2GbZhQ3x9ipK+HtrV8qnCFGt4V0Kxwn+gmKrIt+RmAGyfyz2pyo
-fDd6N+bEfJb4gCCrNa4Am32fYKK6lCq4JCB9l5V8n+eLvyZnBQd3sRy06RpdD0YY
-Jr0C/DdJaGvIYs51XCRdTBqf/YCvbQuW2eXlAuFEc2dB0dO3C9G7na+JK/3AXeUH
-E83z52EBOIW1uuDMMX4oAu5bEmjdU4VjcqqU2+WqHBZJJrOb8COuEpEW+yURf4Ze
-5sSLPLIfqP+npOyeNBraMheHIZnFs3PwrYMyCfmuRdr8WUiPJcr8anapfOL5XoOp
-NdpuRrcP0t2i5WWCojaCNUZd3TasXtwO+WuoYVPqHTJVd6ISACaZG6i1t3d9igYS
-jZpB3JGdOIgwoj02h0wGvXqDj/O2R/lWQIPNrdgy6ROwcvbyzXzj1sYh6fW6Lr+c
-/5mOK+PTN3Pt9MrB+6/c4G3hIDtK+29TpZEVEhxbaeMJAgMBAAE=
+MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEApNHGqYPfKvRpLulWXS8c
+/VuKITatXEhDqrXY4/0ug9SqlZF8e/o3q6FVgbMqdRTniDOrhgx1mUcbzpFJ4Y6Z
+ILcYmIEXne12A2BxHh2SF+9uXBAbwNdlEIXunybhGT4te32UKGGqRN7TdFpr6KsN
+nSSNN2/WyvjL+ytqpa2KyguXkrGHSfwDdUDKDGYmL1eZHjhP2GrWxG6aI8EcMtfp
+mAy/NUXxL2tOB8bGz+IPfTsycwcDqZ0mw59vQUy2+nUTnG/xQpWud6SXPMuSJoJ9
+3tGGU24gz4vptPn7V/L3rGQp8Titgks0IxpwEXZV2T//wNEXBebGUGaoQfOrGSoC
+AzELsxvleqZOKRJyP55Djqh5iELC9tF9yxmCmRLxYwUzYPz234Wf2E0Qi1Vo386e
+VxyDwlCe9IIMEgejVkjseahaS5INmFjCoDjH7cZWY28MtTVy1u9/79n6wBkApJeQ
+7AuWeqPskkNYJz18R2aRjER6/Ru+2gyXw5fnD3RbpLfzAgMBAAE=
 -----END PUBLIC KEY-----
 ARTIFACT_KEY
 )
@@ -1462,7 +1462,7 @@ ARTIFACT_TRUSTED_PUBLIC_KEYS=("$ARTIFACT_TRUSTED_PUBLIC_KEY")
 
 usage() {
     cat <<'USAGE'
-Usage: start [claude|codex] [--agent claude|codex] [--no-update] [--version] [--help]
+Usage: start [claude|codex] [--agent claude|codex] [--resume <session>] [--no-update] [--version] [--help]
 
   claude | codex   Coding agent to launch, e.g. `start codex`. Equivalent to
                    --agent <name>; giving both with different values is an error.
@@ -1471,6 +1471,8 @@ Usage: start [claude|codex] [--agent claude|codex] [--no-update] [--version] [--
                    If none of these is given and stdin is a TTY, start prompts;
                    with no TTY it defaults to claude so that scripted or
                    piped invocations never block on the prompt.
+  --resume <id>    Resume the named session. Translates to `claude --resume
+                   <id>` or `codex resume <id>` for the selected agent.
   --no-update      Skip the start self-update check.
   --version, -v    Print the start version and exit.
   --help, -h       Show this help and exit.
@@ -1484,6 +1486,7 @@ ORIGINAL_ARGS=("$@")
 SKIP_UPDATE=false
 AGENT=""
 POSITIONAL_AGENT=""
+RESUME_SESSION=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -1509,6 +1512,22 @@ while [[ $# -gt 0 ]]; do
             ;;
         --agent=*)
             AGENT="${1#--agent=}"
+            shift
+            ;;
+        --resume)
+            if [[ -z "${2:-}" || "$2" == -* ]]; then
+                echo "Error: --resume requires a session ID or name" >&2
+                exit 1
+            fi
+            RESUME_SESSION="$2"
+            shift 2
+            ;;
+        --resume=*)
+            RESUME_SESSION="${1#--resume=}"
+            if [[ -z "$RESUME_SESSION" ]]; then
+                echo "Error: --resume requires a session ID or name" >&2
+                exit 1
+            fi
             shift
             ;;
         claude|codex)
@@ -1948,9 +1967,16 @@ set_agent_argv() {
     case "$AGENT" in
         claude)
             AGENT_ARGV=(claude --dangerously-skip-permissions --model sonnet)
+            if [[ -n "$RESUME_SESSION" ]]; then
+                AGENT_ARGV+=(--resume "$RESUME_SESSION")
+            fi
             ;;
         codex)
-            AGENT_ARGV=(codex --dangerously-bypass-approvals-and-sandbox)
+            if [[ -n "$RESUME_SESSION" ]]; then
+                AGENT_ARGV=(codex resume --dangerously-bypass-approvals-and-sandbox "$RESUME_SESSION")
+            else
+                AGENT_ARGV=(codex --dangerously-bypass-approvals-and-sandbox)
+            fi
             ;;
     esac
 }
@@ -2071,9 +2097,12 @@ if [[ -n "$SERVER_PID" ]]; then
     fi
 fi
 
-# No element of AGENT_ARGV contains whitespace, so [*] is safe to splice into
-# the send-keys command string.
-tmux send-keys -t "$SESSION_NAME" "unset CLAUDECODE && exec ${AGENT_ARGV[*]}" Enter
+# tmux needs one shell command rather than an argv. Quote every element so a
+# session name containing whitespace or shell metacharacters remains exactly
+# one inert resume argument when the pane's shell evaluates the command.
+printf -v AGENT_COMMAND '%q ' "${AGENT_ARGV[@]}"
+AGENT_COMMAND=${AGENT_COMMAND% }
+tmux send-keys -t "$SESSION_NAME" "unset CLAUDECODE && exec $AGENT_COMMAND" Enter
 
 # Attach to the session
 echo "Attaching to session: $SESSION_NAME"

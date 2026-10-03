@@ -125,11 +125,11 @@ stop_case_server() {
 
 run_tmux_case() {
     local agent=$1
-    local expected_args
+    local resume_id=$2 expected_args
     if [[ "$agent" == claude ]]; then
-        expected_args='--dangerously-skip-permissions --model sonnet'
+        expected_args="--dangerously-skip-permissions --model sonnet --resume $resume_id"
     else
-        expected_args='--dangerously-bypass-approvals-and-sandbox'
+        expected_args="resume --dangerously-bypass-approvals-and-sandbox $resume_id"
     fi
 
     setup_case "$agent"
@@ -144,7 +144,7 @@ run_tmux_case() {
         hash -r
         # tmux attach-session requires a controlling terminal. `script`
         # supplies one without coupling the test to the caller's terminal.
-        script -qefc "start $agent --no-update" /dev/null
+        script -qefc "start $agent --resume $resume_id --no-update" /dev/null
     ) > "$CASE_OUTPUT" 2>&1 &
     local start_pid=$!
     local runtime_line="phase=runtime agent=$agent uid=$TEST_UID pwd=$CASE_HOME args=$expected_args"
@@ -243,8 +243,8 @@ run_unavailable_case() {
 }
 
 echo "Checking real tmux runtime as unprivileged uid $TEST_UID..."
-run_tmux_case claude
-run_tmux_case codex
+run_tmux_case claude 4dcb6804-7929-4ae4-92c6-cb0cc43b8290
+run_tmux_case codex 019dbf76-c928-76b3-84b9-6d8b14fdb99c
 
 echo 'Checking selected-agent failure handling...'
 run_unavailable_case claude

@@ -162,6 +162,21 @@ cp -p \
     "$FIXTURE/hosts/ex44/"
 cp -p "$ROOT/hosts/ex44/keys/"*.pub "$FIXTURE/hosts/ex44/keys/"
 
+# This drill intentionally models a fixed 1.3.1 baseline, a halted 1.3.2
+# candidate, and a 1.3.3 recovery release. Normalize the disposable copies so
+# a newer real checkout does not silently change the scenario's starting
+# version or make its baseline archive inconsistent.
+sed -i \
+    's/^START_SH_VERSION="[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*"$/START_SH_VERSION="1.3.1"/' \
+    "$FIXTURE/hosts/ex44/start.sh"
+sed -i \
+    -e 's/^# Version: [0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*$/# Version: 1.3.1/' \
+    -e 's/bootstrap-[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\.sh/bootstrap-1.3.1.sh/g' \
+    -e 's/^VERSION="[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*"$/VERSION="1.3.1"/' \
+    -e 's/^START_SH_VERSION="[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*"$/START_SH_VERSION="1.3.1"/' \
+    "$FIXTURE/hosts/ex44/bootstrap.sh"
+printf '%s\n' '1.3.1' > "$FIXTURE/hosts/ex44/start.sh.version"
+
 replace_trust_anchor "$FIXTURE/hosts/ex44/start.sh" "$OLD_KEY_ID" "$OLD_PUBLIC"
 install -m 0644 "$OLD_PUBLIC" \
     "$FIXTURE/hosts/ex44/keys/bootstrap-artifacts-signing.pub"

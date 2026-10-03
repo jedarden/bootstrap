@@ -22,7 +22,7 @@
 # bootstrap.sh's embedded copy, then commit both together. See
 # docs/plan/plan.md ADR-1 for why (a hand-patched host copy and a corrupted
 # embedded copy both went undetected in the wild before this rule existed).
-START_SH_VERSION="1.3.1"
+START_SH_VERSION="1.3.2"
 REPO_URL="https://raw.githubusercontent.com/jedarden/bootstrap/main/hosts/ex44"
 ARTIFACT_MANIFEST_FILE="artifact-manifest.txt"
 ARTIFACT_SIGNATURE_FILE="artifact-manifest.sig"

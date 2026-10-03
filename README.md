@@ -43,12 +43,20 @@ edit the embedded copy directly. Edit the standalone `start.sh`, then use the
 release helper to update the release metadata, regenerate the embedded copy,
 create the versioned bootstrap archive, and sign the artifact manifest. Keep
 the private signing key outside Git and provide it through
-`ARTIFACT_SIGNING_KEY`:
+`ARTIFACT_SIGNING_KEY`, or use the non-exportable OpenBao Transit key managed
+for iad-ci:
 
 ```bash
 ARTIFACT_SIGNING_KEY=/secure/path/bootstrap-artifacts-signing.pem \
   ./scripts/start-sh-release.sh release 1.3.2
 ./scripts/start-sh-release.sh --check
+
+# Or submit declarative-config's protected iad-ci WorkflowTemplate with the
+# exact Forgejo main commit and next version. It prepares, Transit-signs,
+# verifies, commits, and pushes the release in one pod:
+#   workflowTemplateRef.name: bootstrap-release-sign
+#   expected-commit: <40-hex Forgejo main commit>
+#   version: 1.3.2
 ```
 
 Each host directory publishes `artifact-manifest.txt` and its detached

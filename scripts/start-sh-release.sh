@@ -26,6 +26,7 @@ usage() {
     cat <<'USAGE'
 Usage:
   scripts/start-sh-release.sh [--host HOST] release VERSION
+  scripts/start-sh-release.sh [--host HOST] prepare-unsigned VERSION
   scripts/start-sh-release.sh [--host HOST] rollback GIT-REF VERSION
   scripts/start-sh-release.sh [--host HOST] manifest VERSION
   scripts/start-sh-release.sh [--host HOST] rotation-check OLD-KEY-ID NEW-KEY-ID
@@ -37,6 +38,11 @@ Commands:
   release VERSION       Set the next start.sh version, regenerate the
                         bootstrap.sh metadata and heredoc, create its
                         bootstrap-VERSION.sh archive, and run all checks.
+  prepare-unsigned VERSION
+                        Prepare those release files and the exact manifest,
+                        but remove the detached signature. This is only for a
+                        protected CI pod whose next container signs that
+                        manifest with OpenBao Transit before verification.
   rollback GIT-REF VERSION
                         Restore start.sh from GIT-REF, publish it under a new
                         forward version, regenerate bootstrap.sh, create its
@@ -57,6 +63,20 @@ Commands:
 VERSION must be MAJOR.MINOR.PATCH and must be greater than the current
 standalone version. A rollback therefore uses a new version even when its
 payload came from an older Git commit; deployed launchers only move forward.
+
+Set exactly one signing backend for release, rollback, or manifest:
+
+  ARTIFACT_SIGNING_KEY=/secure/path/private.pem
+      Sign with an operator-held RSA private-key file.
+
+  ARTIFACT_SIGNING_TRANSIT_KEY=bootstrap-signing/bootstrap-rsa-2026-10
+      Sign with an authenticated OpenBao Transit key. BAO_ADDR and BAO_TOKEN
+      (or the bao CLI's configured equivalents) must identify the owning
+      OpenBao instance. The Transit role needs read on <mount>/keys/<key> and
+      update on <mount>/sign/<key> only.
+
+Transit signing explicitly requests RSA PKCS#1 v1.5 with SHA-256 so existing
+launchers can continue to verify signatures with `openssl dgst -sha256`.
 
 The host artifact checker validates every host directory independently, so
 intentional host-specific splits do not require a special environment flag.
@@ -296,23 +316,106 @@ check_rotation_release() {
 
 require_signing_key() {
     local signing_key=${ARTIFACT_SIGNING_KEY:-}
-    [[ -n "$signing_key" && -f "$signing_key" ]] ||
-        die "ARTIFACT_SIGNING_KEY must point to the release signing key (kept outside Git)"
+    local transit_key=${ARTIFACT_SIGNING_TRANSIT_KEY:-}
+    local signing_fingerprint trusted_fingerprint transit_public_tmp
+
+    if [[ -n "$signing_key" && -n "$transit_key" ]]; then
+        die "set exactly one of ARTIFACT_SIGNING_KEY or ARTIFACT_SIGNING_TRANSIT_KEY"
+    fi
+    if [[ -z "$signing_key" && -z "$transit_key" ]]; then
+        die "set ARTIFACT_SIGNING_KEY or ARTIFACT_SIGNING_TRANSIT_KEY for release signing"
+    fi
     command -v openssl >/dev/null 2>&1 || die "openssl is required to sign the artifact manifest"
     command -v base64 >/dev/null 2>&1 || die "base64 is required to sign the artifact manifest"
 
     [[ -f "$SIGNING_PUBLIC_KEY" ]] ||
         die "pinned artifact trust anchor is missing: $SIGNING_PUBLIC_KEY"
 
-    local signing_fingerprint trusted_fingerprint
-    signing_fingerprint=$(openssl pkey -in "$signing_key" -pubout -outform DER 2>/dev/null |
-        sha256sum | awk '{print $1}') ||
-        die "ARTIFACT_SIGNING_KEY is not a readable signing key"
+    if [[ -n "$signing_key" ]]; then
+        [[ -f "$signing_key" ]] ||
+            die "ARTIFACT_SIGNING_KEY must point to the release signing key (kept outside Git)"
+        signing_fingerprint=$(openssl pkey -in "$signing_key" -pubout -outform DER 2>/dev/null |
+            sha256sum | awk '{print $1}') ||
+            die "ARTIFACT_SIGNING_KEY is not a readable signing key"
+        SIGNING_BACKEND=file
+    else
+        [[ "$transit_key" =~ ^([A-Za-z0-9][A-Za-z0-9_-]*)/([A-Za-z0-9][A-Za-z0-9._-]*)$ ]] ||
+            die "ARTIFACT_SIGNING_TRANSIT_KEY must be <mount>/<key>"
+        command -v bao >/dev/null 2>&1 ||
+            die "bao is required for OpenBao Transit signing"
+        command -v python3 >/dev/null 2>&1 ||
+            die "python3 is required to validate the OpenBao Transit public key"
+        TRANSIT_MOUNT=${BASH_REMATCH[1]}
+        TRANSIT_KEY_NAME=${BASH_REMATCH[2]}
+        transit_public_tmp=$(mktemp "${TMPDIR:-/tmp}/artifact-transit-public.XXXXXX")
+        if ! bao read -format=json "$TRANSIT_MOUNT/keys/$TRANSIT_KEY_NAME" |
+            python3 -c '
+import json
+import sys
+
+payload = json.load(sys.stdin).get("data", {})
+if payload.get("type") != "rsa-3072":
+    raise SystemExit("Transit key must be rsa-3072")
+keys = payload.get("keys", {})
+versions = [int(version) for version in keys if str(version).isdigit()]
+if not versions:
+    raise SystemExit("Transit key has no public versions")
+public_key = keys[str(max(versions))].get("public_key", "")
+if not public_key.startswith("-----BEGIN PUBLIC KEY-----"):
+    raise SystemExit("Transit key did not return a PEM public key")
+sys.stdout.write(public_key)
+if not public_key.endswith("\n"):
+    sys.stdout.write("\n")
+' > "$transit_public_tmp"; then
+            rm -f "$transit_public_tmp"
+            die "could not read a usable RSA-3072 public key from OpenBao Transit"
+        fi
+        signing_fingerprint=$(openssl pkey -pubin -in "$transit_public_tmp" -outform DER 2>/dev/null |
+            sha256sum | awk '{print $1}') || {
+            rm -f "$transit_public_tmp"
+            die "OpenBao Transit returned an unreadable public key"
+        }
+        rm -f "$transit_public_tmp"
+        SIGNING_BACKEND=transit
+    fi
     trusted_fingerprint=$(openssl pkey -pubin -in "$SIGNING_PUBLIC_KEY" -outform DER 2>/dev/null |
         sha256sum | awk '{print $1}') ||
         die "pinned artifact trust anchor is not a readable public key"
     [[ "$signing_fingerprint" == "$trusted_fingerprint" ]] ||
-        die "ARTIFACT_SIGNING_KEY does not match the pinned artifact trust anchor"
+        die "release signer does not match the pinned artifact trust anchor"
+}
+
+sign_artifact_manifest() {
+    local manifest=$1 signature=$2 signing_key=${ARTIFACT_SIGNING_KEY:-}
+    local transit_signature signature_value
+
+    case "$SIGNING_BACKEND" in
+        file)
+            openssl dgst -sha256 -sign "$signing_key" -out "$signature" "$manifest" >/dev/null 2>&1 ||
+                die "could not sign the artifact manifest"
+            ;;
+        transit)
+            transit_signature=$(
+                base64 -w0 "$manifest" |
+                    bao write -field=signature \
+                        "$TRANSIT_MOUNT/sign/$TRANSIT_KEY_NAME" \
+                        input=- hash_algorithm=sha2-256 \
+                        signature_algorithm=pkcs1v15 prehashed=false
+            ) || die "OpenBao Transit could not sign the artifact manifest"
+            [[ "$transit_signature" =~ ^vault:v[0-9]+:([A-Za-z0-9+/]+=*)$ ]] ||
+                die "OpenBao Transit returned a malformed signature"
+            signature_value=${BASH_REMATCH[1]}
+            printf '%s' "$signature_value" | base64 --decode > "$signature" 2>/dev/null ||
+                die "OpenBao Transit returned invalid base64 signature data"
+            ;;
+        *)
+            die "internal error: release signing backend was not selected"
+            ;;
+    esac
+
+    openssl dgst -sha256 -verify "$SIGNING_PUBLIC_KEY" \
+        -signature "$signature" "$manifest" >/dev/null 2>&1 ||
+        die "release signer produced a signature that the pinned trust anchor rejected"
 }
 
 manifest_artifacts() {
@@ -331,7 +434,7 @@ manifest_artifacts() {
 }
 
 write_artifact_manifest() {
-    local version=$1 signing_key=${ARTIFACT_SIGNING_KEY:-}
+    local version=$1
     local key_id path digest manifest_tmp signature_tmp signature_value
     local -a artifacts
 
@@ -351,10 +454,10 @@ write_artifact_manifest() {
             printf 'artifact=%s %s\n' "$path" "$digest"
         done
     } > "$manifest_tmp"
-    openssl dgst -sha256 -sign "$signing_key" -out "$signature_tmp" "$manifest_tmp" >/dev/null 2>&1 || {
+    if ! sign_artifact_manifest "$manifest_tmp" "$signature_tmp"; then
         rm -f "$manifest_tmp" "$signature_tmp"
-        die "could not sign the artifact manifest"
-    }
+        return 1
+    fi
     signature_value=$(base64 -w0 "$signature_tmp")
     mv "$manifest_tmp" "$MANIFEST_FILE"
     {
@@ -362,6 +465,31 @@ write_artifact_manifest() {
         printf 'signature=%s\n' "$signature_value"
     } > "$SIGNATURE_FILE"
     rm -f "$signature_tmp"
+}
+
+write_unsigned_artifact_manifest() {
+    local version=$1 key_id path digest manifest_tmp
+    local -a artifacts
+
+    key_id=$(extract_artifact_key_id "$START_SH")
+    [[ "$(extract_artifact_key_id "$BOOTSTRAP_SH")" == "$key_id" ]] ||
+        die "bootstrap.sh and start.sh use different artifact signing key IDs"
+    mapfile -t artifacts < <(manifest_artifacts "$version")
+    manifest_tmp=$(mktemp "${TMPDIR:-/tmp}/artifact-manifest.XXXXXX")
+    {
+        printf '%s\n' 'format=bootstrap-artifact-manifest-v1'
+        printf 'key_id=%s\n' "$key_id"
+        printf 'version=%s\n' "$version"
+        for path in "${artifacts[@]}"; do
+            digest=$(sha256sum "$HOST_DIR/$path" | awk '{print $1}')
+            printf 'artifact=%s %s\n' "$path" "$digest"
+        done
+    } > "$manifest_tmp"
+    mv "$manifest_tmp" "$MANIFEST_FILE"
+    # A stale signature beside a newly prepared manifest is more dangerous
+    # than an absent one: the protected signer container must be the only next
+    # step capable of making this release publishable.
+    rm -f "$SIGNATURE_FILE"
 }
 
 check_artifact_manifest() {
@@ -588,6 +716,33 @@ prepare_release() {
     echo "Prepared start.sh release $next. Review the diff, then commit the release files."
 }
 
+prepare_unsigned_release() {
+    local next=$1 current
+    require_version "$next"
+    "$ROOT/scripts/check-secret-leakage.sh" --artifacts
+    bash -n "$START_SH"
+    current=$(extract_start_version "$START_SH")
+    require_forward_version "$current" "$next"
+
+    write_start_version "$START_SH" "$next"
+    write_version_file "$next"
+    write_bootstrap_version "$BOOTSTRAP_SH" "$next"
+    "$SYNC_SH"
+    create_bootstrap_archive "$next"
+    write_unsigned_artifact_manifest "$next"
+
+    bash -n "$START_SH"
+    bash -n "$BOOTSTRAP_SH"
+    check_trusted_key_declarations
+    check_immutable_archives
+    "$ROOT/scripts/check-secret-leakage.sh" --artifacts
+    "$SYNC_SH" --check
+    check_versions
+    [[ -f "$MANIFEST_FILE" && ! -e "$SIGNATURE_FILE" ]] ||
+        die "unsigned CI preparation did not leave exactly one unsigned manifest"
+    echo "Prepared unsigned start.sh release $next for the protected Transit signer."
+}
+
 prepare_rollback() {
     local ref=$1 next=$2 current candidate candidate_version
     require_version "$next"
@@ -644,6 +799,10 @@ case "${1:-}" in
     release)
         [[ $# -eq 2 ]] || { usage >&2; exit 2; }
         prepare_release "$2"
+        ;;
+    prepare-unsigned)
+        [[ $# -eq 2 ]] || { usage >&2; exit 2; }
+        prepare_unsigned_release "$2"
         ;;
     rollback)
         [[ $# -eq 3 ]] || { usage >&2; exit 2; }

@@ -8,10 +8,71 @@ rotation; after the first release, use the overlap procedure in the
 [release documentation](../../README.md#signing-key-rotation).
 
 The private key must remain outside the repository and outside release
-artifacts. The release helper receives only a filesystem path through
-`ARTIFACT_SIGNING_KEY`; it reads the key when OpenSSL signs the manifest. Do
-not put the PEM value in an environment variable, a command argument, a log,
-or a commit.
+artifacts. For the legacy operator-held backend, the release helper receives
+only a filesystem path through `ARTIFACT_SIGNING_KEY`; it reads the key when
+OpenSSL signs the manifest. For CI, use the non-exportable OpenBao Transit key
+through `ARTIFACT_SIGNING_TRANSIT_KEY`; iad-ci authenticates with a projected
+service-account token and receives only a short-lived OpenBao token. Do not put
+a PEM value or an OpenBao token in an environment literal, command argument,
+log, workflow parameter, or commit.
+
+Transit uses RSA-3072 and explicitly requests PKCS#1 v1.5 with SHA-256. That is
+the same signature encoding produced by the existing `openssl dgst -sha256`
+path, so launcher verification and `artifact-manifest.sig` do not change.
+
+## Protected iad-ci Transit releases
+
+The GitOps resources live in `declarative-config`:
+
+- `k8s/rs-manager/openbao/hardening-reconciler.yml` owns the dedicated
+  `bootstrap-signing` Transit mount, non-exportable
+  `bootstrap-rsa-2026-10` RSA-3072 key, exact-path policy, and 10-minute
+  Kubernetes-auth role.
+- `k8s/iad-ci/argo-workflows/bootstrap-release-signer-serviceaccount.yml`
+  owns the dedicated service account and only the Argo emissary result-write
+  RBAC.
+- `bootstrap-release-sign-workflowtemplate.yml` clones one exact Forgejo main
+  commit, prepares an unsigned release in an ephemeral `emptyDir`, signs the
+  exact manifest through Transit, verifies it against the pinned public key,
+  checks the changed-path allowlist, and then fast-forward pushes main.
+- `bootstrap-release-signer-guard.yml` rejects a Workflow that names the
+  signer service account directly. Submit the approved WorkflowTemplate by
+  reference; do not copy its pod spec into an ad-hoc Workflow.
+
+Submit with the exact current Forgejo main commit and a forward semantic
+version. Parameters are non-sensitive and enter containers as environment
+values rather than shell source:
+
+```yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: bootstrap-release-sign-manual-
+  namespace: argo-workflows
+spec:
+  workflowTemplateRef:
+    name: bootstrap-release-sign
+  arguments:
+    parameters:
+      - name: expected-commit
+        value: <40-hex Forgejo main commit>
+      - name: version
+        value: 1.3.2
+```
+
+The signer service account is not a general CI identity. Its projected token
+has the `openbao-rs-manager` audience, and its OpenBao policy can only read the
+public metadata and call the sign endpoint of that one key. It cannot create,
+rotate, configure, export, back up, or delete a key. The private key never
+leaves OpenBao; Raft snapshot recovery is its recovery mechanism.
+
+The initial move from `bootstrap-rsa-2026-09` is a trust-anchor replacement,
+not an overlap rotation, because the old private key is unavailable on the
+signing host. Pin the Transit public key, create the first Transit-signed
+release, and replace already-deployed launchers through the documented
+[emergency compromise recovery procedure](./artifact-signing-compromise-recovery.md).
+After that one-time transition, normal releases use only the protected
+WorkflowTemplate.
 
 ## New divergent host lineage
 

@@ -40,6 +40,20 @@ cp -p "$ROOT/hosts/ex44/keys/"*.pub "$FIXTURE/hosts/ex44/keys/"
 cp -p "$KEY_DIR/public.pem" \
     "$FIXTURE/hosts/ex44/keys/bootstrap-artifacts-signing.pub"
 
+# The Transit test exercises a fixed 1.3.1 manifest followed by unsigned and
+# signed 1.3.2 preparation. Normalize the disposable canonical files so the
+# real checkout can advance without invalidating that scenario.
+sed -i \
+    's/^START_SH_VERSION="[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*"$/START_SH_VERSION="1.3.1"/' \
+    "$FIXTURE/hosts/ex44/start.sh"
+sed -i \
+    -e 's/^# Version: [0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*$/# Version: 1.3.1/' \
+    -e 's/bootstrap-[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\.sh/bootstrap-1.3.1.sh/g' \
+    -e 's/^VERSION="[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*"$/VERSION="1.3.1"/' \
+    -e 's/^START_SH_VERSION="[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*"$/START_SH_VERSION="1.3.1"/' \
+    "$FIXTURE/hosts/ex44/bootstrap.sh"
+printf '%s\n' '1.3.1' > "$FIXTURE/hosts/ex44/start.sh.version"
+
 python3 - "$FIXTURE/hosts/ex44/start.sh" "$KEY_DIR/public.pem" <<'PY'
 import pathlib
 import sys

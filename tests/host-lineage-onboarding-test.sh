@@ -10,7 +10,13 @@ FIXTURE="$TMP/repository"
 SIGNING_DIR="$TMP/operator-signing"
 SSH_DIR="$TMP/operator-ssh"
 HOST=lab
-VERSION=1.3.2
+SOURCE_VERSION=$(<"$ROOT/hosts/ex44/start.sh.version")
+[[ "$SOURCE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+    echo "FAIL: source lineage version is malformed" >&2
+    exit 1
+}
+IFS=. read -r SOURCE_MAJOR SOURCE_MINOR SOURCE_PATCH <<< "$SOURCE_VERSION"
+VERSION="$SOURCE_MAJOR.$SOURCE_MINOR.$((SOURCE_PATCH + 1))"
 KEY_ID=bootstrap-rsa-lab-onboarding
 trap 'rm -rf "$TMP"' EXIT
 
@@ -43,6 +49,7 @@ assert_documented() {
 replace_trust_anchor() {
     python3 - "$1" "$2" "$3" <<'PY'
 import pathlib
+import re
 import sys
 
 start_path = pathlib.Path(sys.argv[1])
@@ -56,10 +63,15 @@ start = text.index(begin)
 finish = text.index(end, start) + len(end)
 replacement = begin + public_key + end
 text = text[:start] + replacement + text[finish:]
-text = text.replace(
-    'ARTIFACT_TRUSTED_KEY_ID="bootstrap-rsa-2026-09"',
+text, count = re.subn(
+    r'^ARTIFACT_TRUSTED_KEY_ID="[A-Za-z0-9._-]+"$',
     f'ARTIFACT_TRUSTED_KEY_ID="{key_id}"',
+    text,
+    count=1,
+    flags=re.MULTILINE,
 )
+if count != 1:
+    raise SystemExit("could not replace the source lineage key ID")
 start_path.write_text(text)
 PY
 }

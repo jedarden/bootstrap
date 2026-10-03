@@ -69,6 +69,20 @@ cp -p "$ROOT/hosts/ex44/keys/"*.pub "$FIXTURE/hosts/ex44/keys/"
 cp -p "$TEST_SIGNING_DIR/public.pem" \
     "$FIXTURE/hosts/ex44/keys/bootstrap-artifacts-signing.pub"
 
+# The release/rollback scenario has a fixed 1.3.1 baseline followed by 1.3.2
+# and 1.3.3. Normalize the disposable canonical files so the real checkout's
+# current version does not change that fixture or require a future archive.
+sed -i \
+    's/^START_SH_VERSION="[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*"$/START_SH_VERSION="1.3.1"/' \
+    "$FIXTURE/hosts/ex44/start.sh"
+sed -i \
+    -e 's/^# Version: [0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*$/# Version: 1.3.1/' \
+    -e 's/bootstrap-[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\.sh/bootstrap-1.3.1.sh/g' \
+    -e 's/^VERSION="[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*"$/VERSION="1.3.1"/' \
+    -e 's/^START_SH_VERSION="[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*"$/START_SH_VERSION="1.3.1"/' \
+    "$FIXTURE/hosts/ex44/bootstrap.sh"
+printf '%s\n' '1.3.1' > "$FIXTURE/hosts/ex44/start.sh.version"
+
 python3 - "$FIXTURE/hosts/ex44/start.sh" \
     "$FIXTURE/hosts/ex44/bootstrap.sh" "$TEST_SIGNING_DIR/public.pem" <<'PY'
 import pathlib
@@ -104,10 +118,13 @@ PY
 (cd "$FIXTURE/hosts/ex44" && ./sync-start-sh.sh >/dev/null)
 grep -Fq 'bootstrap-rsa-rotation-test' "$FIXTURE/hosts/ex44/bootstrap.sh" ||
     fail 'sync did not propagate the overlap key to bootstrap.sh'
+PRIMARY_KEY_ID=$(sed -n 's/^ARTIFACT_TRUSTED_KEY_ID="\([A-Za-z0-9._-]*\)"$/\1/p' \
+    "$FIXTURE/hosts/ex44/start.sh")
+[[ -n "$PRIMARY_KEY_ID" ]] || fail 'fixture launcher has no primary artifact key ID'
 cp -p "$FIXTURE/hosts/ex44/bootstrap.sh" "$FIXTURE/hosts/ex44/bootstrap-1.3.1.sh"
 (cd "$FIXTURE" && scripts/start-sh-release.sh manifest 1.3.1 >/dev/null)
 (cd "$FIXTURE" && scripts/start-sh-release.sh rotation-check \
-    bootstrap-rsa-2026-09 bootstrap-rsa-rotation-test >/dev/null) ||
+    "$PRIMARY_KEY_ID" bootstrap-rsa-rotation-test >/dev/null) ||
     fail 'rotation-check rejected the prepared overlap release'
 
 git -C "$FIXTURE" init -q -b main

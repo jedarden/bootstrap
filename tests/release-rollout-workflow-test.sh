@@ -67,9 +67,23 @@ prepare_lineage() {
     local host=$1 host_dir="$FIXTURE/hosts/$1"
     mkdir -p "$host_dir/keys"
     cp -p "$ROOT/hosts/ex44/start.sh" "$ROOT/hosts/ex44/bootstrap.sh" "$ROOT/hosts/ex44/start.sh.version" "$ROOT/hosts/ex44/sync-start-sh.sh" "$host_dir/"
-    cp -p "$ROOT"/hosts/ex44/bootstrap-*.sh "$host_dir/"
+    cp -p \
+        "$ROOT"/hosts/ex44/bootstrap-1.0.*.sh \
+        "$ROOT"/hosts/ex44/bootstrap-1.1.*.sh \
+        "$ROOT/hosts/ex44/bootstrap-1.3.1.sh" \
+        "$host_dir/"
     cp -p "$ROOT/hosts/ex44/keys/jedarden.pub" "$ROOT/hosts/ex44/keys/jeda-mbp.pub" "$host_dir/keys/"
     cp -p "$PUBLIC_KEY" "$host_dir/keys/bootstrap-artifacts-signing.pub"
+    sed -i \
+        's/^START_SH_VERSION="[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*"$/START_SH_VERSION="1.3.1"/' \
+        "$host_dir/start.sh"
+    sed -i \
+        -e 's/^# Version: [0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*$/# Version: 1.3.1/' \
+        -e 's/bootstrap-[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\.sh/bootstrap-1.3.1.sh/g' \
+        -e 's/^VERSION="[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*"$/VERSION="1.3.1"/' \
+        -e 's/^START_SH_VERSION="[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*"$/START_SH_VERSION="1.3.1"/' \
+        "$host_dir/bootstrap.sh"
+    printf '%s\n' '1.3.1' > "$host_dir/start.sh.version"
     python3 - "$host_dir/start.sh" "$PUBLIC_KEY" "$host" <<'PY'
 import pathlib
 import sys
@@ -94,11 +108,14 @@ PY
 }
 
 write_manifest() {
-    local host=$1 host_dir="$FIXTURE/hosts/$1" version
+    local host=$1 host_dir="$FIXTURE/hosts/$1" version key_id
     version=$(tr -d '\r\n' < "$host_dir/start.sh.version")
+    key_id=$(sed -n 's/^ARTIFACT_TRUSTED_KEY_ID="\([A-Za-z0-9._-]*\)"$/\1/p' \
+        "$host_dir/start.sh")
+    [[ -n "$key_id" ]] || fail "$host has no primary artifact key ID"
     {
         printf '%s\n' 'format=bootstrap-artifact-manifest-v1'
-        printf '%s\n' 'key_id=bootstrap-rsa-2026-09'
+        printf 'key_id=%s\n' "$key_id"
         printf 'version=%s\n' "$version"
         for path in bootstrap.sh start.sh start.sh.version keys/jedarden.pub keys/jeda-mbp.pub keys/bootstrap-artifacts-signing.pub; do
             printf 'artifact=%s %s\n' "$path" "$(sha256sum "$host_dir/$path" | awk '{print $1}')"
@@ -110,7 +127,7 @@ write_manifest() {
     } > "$host_dir/artifact-manifest.txt"
     openssl dgst -sha256 -sign "$PRIVATE_KEY" -out "$TMP/$host-manifest.sig.bin" "$host_dir/artifact-manifest.txt" 2>/dev/null
     {
-        printf '%s\n' 'key_id=bootstrap-rsa-2026-09'
+        printf 'key_id=%s\n' "$key_id"
         printf 'signature=%s\n' "$(base64 -w0 "$TMP/$host-manifest.sig.bin")"
     } > "$host_dir/artifact-manifest.sig"
 }

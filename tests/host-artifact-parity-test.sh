@@ -36,10 +36,13 @@ write_lab_manifest() {
     local manifest="$FIXTURE/hosts/lab/artifact-manifest.txt"
     local signature="$FIXTURE/hosts/lab/artifact-manifest.sig"
     local signature_bin="$TMP/lab-signature.bin"
-    local path
+    local path key_id
+    key_id=$(sed -n 's/^ARTIFACT_TRUSTED_KEY_ID="\([A-Za-z0-9._-]*\)"$/\1/p' \
+        "$FIXTURE/hosts/lab/start.sh")
+    [[ -n "$key_id" ]] || fail 'lab fixture has no primary artifact key ID'
     {
         printf '%s\n' 'format=bootstrap-artifact-manifest-v1'
-        printf '%s\n' 'key_id=bootstrap-rsa-2026-09'
+        printf 'key_id=%s\n' "$key_id"
         printf '%s\n' 'version=1.3.1'
         for path in bootstrap.sh start.sh start.sh.version; do
             printf 'artifact=%s %s\n' "$path" \
@@ -58,7 +61,7 @@ write_lab_manifest() {
     openssl dgst -sha256 -sign "$TMP/lab-signing-private.pem" \
         -out "$signature_bin" "$manifest" 2>/dev/null
     {
-        printf '%s\n' 'key_id=bootstrap-rsa-2026-09'
+        printf 'key_id=%s\n' "$key_id"
         printf 'signature=%s\n' "$(base64 -w0 "$signature_bin")"
     } > "$signature"
 }
@@ -106,6 +109,16 @@ mkdir -p "$FIXTURE/hosts/lab/keys"
 cp -p "$FIXTURE/hosts/ex44/keys/"*.pub "$FIXTURE/hosts/lab/keys/"
 cp -p "$FIXTURE"/hosts/ex44/bootstrap-*.sh "$FIXTURE/hosts/lab/"
 printf '%s\n' '| [hosts/lab/](./hosts/lab/) | Fixture-specific host split |' >> "$FIXTURE/README.md"
+sed -i \
+    's/^START_SH_VERSION="[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*"$/START_SH_VERSION="1.3.1"/' \
+    "$FIXTURE/hosts/lab/start.sh"
+sed -i \
+    -e 's/^# Version: [0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*$/# Version: 1.3.1/' \
+    -e 's/bootstrap-[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\.sh/bootstrap-1.3.1.sh/g' \
+    -e 's/^VERSION="[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*"$/VERSION="1.3.1"/' \
+    -e 's/^START_SH_VERSION="[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*"$/START_SH_VERSION="1.3.1"/' \
+    "$FIXTURE/hosts/lab/bootstrap.sh"
+printf '%s\n' '1.3.1' > "$FIXTURE/hosts/lab/start.sh.version"
 printf '# lab-specific divergence\n' >> "$FIXTURE/hosts/lab/start.sh"
 (cd "$FIXTURE/hosts/lab" && ./sync-start-sh.sh >/dev/null)
 cp -p "$FIXTURE/hosts/lab/bootstrap.sh" "$FIXTURE/hosts/lab/bootstrap-1.3.1.sh"

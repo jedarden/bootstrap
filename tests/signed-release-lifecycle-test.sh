@@ -97,13 +97,35 @@ export ARTIFACT_SIGNING_KEY="$SIGNING_DIR/private.pem"
 
 cp -p "$ROOT/README.md" "$FIXTURE/"
 cp -p "$ROOT/scripts/"*.sh "$FIXTURE/scripts/"
-cp -p "$ROOT/hosts/ex44/"*.sh "$FIXTURE/hosts/ex44/"
+cp -p \
+    "$ROOT/hosts/ex44/bootstrap.sh" \
+    "$ROOT/hosts/ex44/start.sh" \
+    "$ROOT/hosts/ex44/sync-start-sh.sh" \
+    "$ROOT"/hosts/ex44/bootstrap-1.0.*.sh \
+    "$ROOT"/hosts/ex44/bootstrap-1.1.*.sh \
+    "$ROOT/hosts/ex44/bootstrap-1.3.1.sh" \
+    "$FIXTURE/hosts/ex44/"
 cp -p "$ROOT/hosts/ex44/start.sh.version" "$FIXTURE/hosts/ex44/"
 cp -p "$ROOT/hosts/ex44/keys/"*.pub "$FIXTURE/hosts/ex44/keys/"
 cp -p "$SIGNING_DIR/public.pem" \
     "$FIXTURE/hosts/ex44/keys/bootstrap-artifacts-signing.pub"
 cp -p "$ROOT/tests/integration/host-fixture.sh" \
     "$FIXTURE/tests/integration/"
+
+# This end-to-end scenario deliberately starts at 1.3.1, publishes 1.3.2,
+# injects a bad 1.3.3, and recovers forward to 1.3.4. Normalize only the
+# disposable canonical files and omit future real archives so that sequence
+# stays stable when the production release advances.
+sed -i \
+    's/^START_SH_VERSION="[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*"$/START_SH_VERSION="1.3.1"/' \
+    "$FIXTURE/hosts/ex44/start.sh"
+sed -i \
+    -e 's/^# Version: [0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*$/# Version: 1.3.1/' \
+    -e 's/bootstrap-[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\.sh/bootstrap-1.3.1.sh/g' \
+    -e 's/^VERSION="[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*"$/VERSION="1.3.1"/' \
+    -e 's/^START_SH_VERSION="[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*"$/START_SH_VERSION="1.3.1"/' \
+    "$FIXTURE/hosts/ex44/bootstrap.sh"
+printf '%s\n' '1.3.1' > "$FIXTURE/hosts/ex44/start.sh.version"
 
 python3 - "$FIXTURE/hosts/ex44/start.sh" "$SIGNING_DIR/public.pem" \
     "$RAW_RELEASE_BASE" <<'PY'

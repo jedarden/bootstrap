@@ -7,6 +7,13 @@ set -Eeuo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 START_SH="$ROOT/hosts/ex44/start.sh"
+CURRENT_VERSION=$(sed -n 's/^START_SH_VERSION="\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)"$/\1/p' "$START_SH")
+[[ -n "$CURRENT_VERSION" ]] || {
+    echo "FAIL: could not read the committed launcher version" >&2
+    exit 1
+}
+IFS=. read -r CURRENT_MAJOR CURRENT_MINOR CURRENT_PATCH <<< "$CURRENT_VERSION"
+HIGHER_VERSION="$CURRENT_MAJOR.$CURRENT_MINOR.$((CURRENT_PATCH + 1))"
 BASH_BIN_DIR=$(dirname "$(command -v bash)")
 OPENSSL_BIN_DIR=$(dirname "$(command -v openssl)")
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/start-sh-self-update.XXXXXX")
@@ -67,7 +74,7 @@ setup_case() {
     # has the right syntax but an older internal version and must be rejected.
     cp "$START_SH" "$PAYLOAD_FILE"
     cp "$PAYLOAD_FILE" "$STALE_PAYLOAD_FILE"
-    sed -i 's/^START_SH_VERSION="1\.3\.1"$/START_SH_VERSION="0.9.0"/' "$STALE_PAYLOAD_FILE"
+    sed -i 's/^START_SH_VERSION="[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*"$/START_SH_VERSION="0.9.0"/' "$STALE_PAYLOAD_FILE"
     chmod +x "$PAYLOAD_FILE"
 
     # curl serves the committed signed manifest or the selected launcher
@@ -194,14 +201,14 @@ target_path=$(sed -n 's/^target=//p' "$MV_LOG")
 assert_no_update_temps
 
 echo 'Checking equal and lower remote versions do not replace the launcher...'
-run_case equal success 1.3.1
+run_case equal success "$CURRENT_VERSION"
 assert_unchanged 'equal release version changed the launcher'
 [[ ! -f "$MV_LOG" ]] || fail 'equal release version reached the replacement step'
 payload_fetches=$(grep -Ec '/start\.sh$' "$CURL_LOG" || true)
 [[ "$payload_fetches" -eq 0 ]] || fail 'equal release version fetched a launcher payload'
 assert_no_update_temps
 
-run_case lower success 1.3.2
+run_case lower success "$HIGHER_VERSION"
 assert_unchanged 'lower remote release version changed the launcher'
 [[ ! -f "$MV_LOG" ]] || fail 'lower remote release version reached the replacement step'
 payload_fetches=$(grep -Ec '/start\.sh$' "$CURL_LOG" || true)
